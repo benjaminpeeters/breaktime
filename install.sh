@@ -19,28 +19,26 @@ readonly BOLD='\033[1m'
 readonly NC='\033[0m'
 
 usage() {
-    cat << EOF
-${BOLD}Breaktime Installation Script${NC}
-
-${BOLD}USAGE:${NC}
-    ./install.sh [OPTIONS]
-
-${BOLD}OPTIONS:${NC}
-    --uninstall, -u     Uninstall breaktime
-    --help, -h          Show this help message
-
-${BOLD}DESCRIPTION:${NC}
-    Installs breaktime automated break scheduling system:
-    - Creates symlink in ~/bin/
-    - Sets up systemd user service
-    - Creates default configuration
-    - Enables auto-start on login
-
-${BOLD}REQUIREMENTS:${NC}
-    - systemd (for background service)
-    - notify-send (for desktop notifications)
-    - cron (for scheduling)
-EOF
+    echo -e "${BOLD}Breaktime Installation Script${NC}"
+    echo ""
+    echo -e "${BOLD}USAGE:${NC}"
+    echo "    ./install.sh [OPTIONS]"
+    echo ""
+    echo -e "${BOLD}OPTIONS:${NC}"
+    echo "    --uninstall, -u     Uninstall breaktime"
+    echo "    --help, -h          Show this help message"
+    echo ""
+    echo -e "${BOLD}DESCRIPTION:${NC}"
+    echo "    Installs breaktime automated break scheduling system:"
+    echo "    - Creates symlink in ~/bin/"
+    echo "    - Sets up systemd user service"
+    echo "    - Creates default configuration"
+    echo "    - Enables auto-start on login"
+    echo ""
+    echo -e "${BOLD}REQUIREMENTS:${NC}"
+    echo "    - systemd (for background service)"
+    echo "    - notify-send (for desktop notifications)"
+    echo "    - cron (for scheduling)"
 }
 
 check_requirements() {

@@ -27,37 +27,35 @@ readonly BOLD='\033[1m'
 readonly NC='\033[0m' # No Color
 
 usage() {
-    cat << EOF
-${BOLD}breaktime${NC} - Automated break scheduling system
-
-${BOLD}USAGE:${NC}
-    breaktime [COMMAND]
-
-${BOLD}COMMANDS:${NC}
-    --help, -h          Show this help message
-    --config, -c        Edit configuration file
-    --status, -s        Show current status and next scheduled breaks
-    --daemon, -d        Run as background daemon (used by systemd)
-    --install           Install systemd service and setup
-    --uninstall         Remove systemd service and cleanup
-
-${BOLD}CONFIGURATION:${NC}
-    Configuration file: ${CONFIG_FILE}
-    Default template:   ${DEFAULT_CONFIG}
-
-${BOLD}EXAMPLES:${NC}
-    breaktime --config      # Edit break schedules
-    breaktime --status      # Check upcoming breaks
-    breaktime --install     # Set up automatic scheduling
-
-${BOLD}BREAK TYPES:${NC}
-    - bedtime: Evening shutdown/suspend
-    - lunch_break: Midday break
-    - afternoon_nap: Weekend rest
-    - focus_break: Work session breaks
-
-For more information, see: https://github.com/benjaminpeeters/breaktime
-EOF
+    echo -e "${BOLD}breaktime${NC} - Automated break scheduling system"
+    echo ""
+    echo -e "${BOLD}USAGE:${NC}"
+    echo "    breaktime [COMMAND]"
+    echo ""
+    echo -e "${BOLD}COMMANDS:${NC}"
+    echo "    --help, -h          Show this help message"
+    echo "    --config, -c        Edit configuration file"
+    echo "    --status, -s        Show current status and next scheduled breaks"
+    echo "    --daemon, -d        Run as background daemon (used by systemd)"
+    echo "    --install           Install systemd service and setup"
+    echo "    --uninstall         Remove systemd service and cleanup"
+    echo ""
+    echo -e "${BOLD}CONFIGURATION:${NC}"
+    echo "    Configuration file: ${CONFIG_FILE}"
+    echo "    Default template:   ${DEFAULT_CONFIG}"
+    echo ""
+    echo -e "${BOLD}EXAMPLES:${NC}"
+    echo "    breaktime --config      # Edit break schedules"
+    echo "    breaktime --status      # Check upcoming breaks"
+    echo "    breaktime --install     # Set up automatic scheduling"
+    echo ""
+    echo -e "${BOLD}BREAK TYPES:${NC}"
+    echo "    - bedtime: Evening shutdown/suspend"
+    echo "    - lunch_break: Midday break"
+    echo "    - afternoon_nap: Weekend rest"
+    echo "    - focus_break: Work session breaks"
+    echo ""
+    echo "For more information, see: https://github.com/benjaminpeeters/breaktime"
 }
 
 main() {
