@@ -18,11 +18,15 @@ snooze_get_count() {
     local alarm_name="$1"
     local state_file="${SNOOZE_STATE_DIR}/${alarm_name}.count"
     
+    local count
     if [[ -f "$state_file" ]]; then
-        cat "$state_file"
+        count=$(cat "$state_file")
     else
-        echo "0"
+        count="0"
     fi
+    
+    logger -t breaktime "DEBUG: snooze_get_count($alarm_name) = $count"
+    echo "$count"
 }
 
 # Set snooze count for an alarm
@@ -41,6 +45,7 @@ snooze_increment_count() {
     local current_count=$(snooze_get_count "$alarm_name")
     local new_count=$((current_count + 1))
     
+    logger -t breaktime "DEBUG: snooze_increment_count($alarm_name) from $current_count to $new_count"
     snooze_set_count "$alarm_name" "$new_count"
     echo "$new_count"
 }
@@ -84,10 +89,11 @@ snooze_get_remaining() {
     local remaining=$((max_snoozes - current_count))
     
     if [[ $remaining -lt 0 ]]; then
-        echo "0"
-    else
-        echo "$remaining"
+        remaining="0"
     fi
+    
+    logger -t breaktime "DEBUG: snooze_get_remaining($alarm_name) = $remaining (current: $current_count, max: $max_snoozes)"
+    echo "$remaining"
 }
 
 # Calculate new time after snooze

@@ -194,19 +194,32 @@ cron_execute_action() {
     # Clean up any pending snooze jobs
     snooze_cleanup_jobs "$alarm_name"
     
-    # Send final notification
+    # Send final notification (this will handle user interaction)
     notify_send_final "$alarm_name" "$action"
     
-    # Wait a moment for notification to show
-    sleep 2
+    # Note: Action execution is now handled by notify_send_final through user interaction
+    # This function only gets called for immediate execution (--sleep-now)
+}
+
+# Execute the actual system action (called when user clicks "Suspend Now")
+cron_execute_system_action() {
+    local action="$1"
     
-    # Execute the action
+    logger -t breaktime "Executing system action: $action"
     case "$action" in
         "suspend")
-            systemctl suspend
+            # Try multiple suspend methods in order of preference
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl suspend || logger -t breaktime "systemctl suspend failed"
+            elif command -v pm-suspend >/dev/null 2>&1; then
+                pm-suspend || logger -t breaktime "pm-suspend failed"
+            else
+                # Use dbus as last resort
+                dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.Suspend boolean:true || logger -t breaktime "dbus suspend failed"
+            fi
             ;;
         "shutdown")
-            shutdown -h now
+            systemctl poweroff || shutdown -h now
             ;;
         "hibernate")
             systemctl hibernate

@@ -142,7 +142,7 @@ daemon_handle_sleep_now() {
     local alarm_name="$1"
     local action="$2"
     
-    logger -t breaktime "Immediate sleep requested for $alarm_name with action $action"
+    logger -t breaktime "DEBUG: daemon_handle_sleep_now called with alarm=$alarm_name action=$action"
     
     # Reset snooze count since we're executing now
     snooze_reset_count "$alarm_name"
@@ -150,15 +150,19 @@ daemon_handle_sleep_now() {
     # Clean up any pending snooze jobs (but keep original cron schedule)
     snooze_cleanup_jobs "$alarm_name"
     
-    # Execute the action immediately
-    cron_execute_action "$alarm_name" "$action"
+    logger -t breaktime "DEBUG: About to execute action $action"
+    
+    # Execute the system action directly
+    cron_execute_system_action "$action"
+    
+    logger -t breaktime "DEBUG: Finished executing action $action"
 }
 
 # Handle snooze request from suspend dialog
 daemon_handle_snooze_suspend() {
     local alarm_name="$1"
     
-    logger -t breaktime "Snooze from suspend dialog requested for $alarm_name"
+    logger -t breaktime "DEBUG: daemon_handle_snooze_suspend called with alarm=$alarm_name"
     
     # Check if snoozing is still allowed
     if [[ $(snooze_is_allowed "$alarm_name") != "true" ]]; then
@@ -170,6 +174,8 @@ daemon_handle_snooze_suspend() {
     local new_count=$(snooze_increment_count "$alarm_name")
     local max_snoozes=$(snooze_get_max)
     local snooze_duration=$(snooze_get_duration)
+    
+    logger -t breaktime "DEBUG: Incremented snooze count to $new_count/$max_snoozes"
     
     # Calculate new suspend time (from current time)
     local current_hour=$(date +%H)

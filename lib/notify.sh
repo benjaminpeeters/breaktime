@@ -24,12 +24,19 @@ yad_send_notification() {
         
         # Check snooze availability for final suspend dialog
         local remaining_snoozes=$(snooze_get_remaining "$alarm_name")
+        local current_count=$(snooze_get_count "$alarm_name")
+        local max_snoozes=$(snooze_get_max)
         local snooze_duration=$(snooze_get_duration)
         
         if [[ $remaining_snoozes -gt 0 ]]; then
-            buttons="--button=Suspend Now:0 --button=Snooze ${snooze_duration}min \\(${remaining_snoozes} left\\):1"
+            # Show both remaining and used counts for clarity
+            buttons="--button=\"Suspend Now\":0 --button=\"Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left)\":1"
+            # Add snooze info to message
+            message="$message\n\n📊 Snooze status: Used ${current_count}/${max_snoozes}"
         else
-            buttons="--button=Suspend Now:0"
+            buttons="--button=\"Suspend Now\":0"
+            # Show that snooze limit is reached
+            message="$message\n\n🚫 Snooze limit reached (${max_snoozes}/${max_snoozes})"
         fi
     elif [[ $minutes -le 2 ]]; then
         dialog_type="--info"
@@ -72,9 +79,13 @@ yad_send_notification() {
         --sticky \
         --always-print-result"
     
-    # Add close protection for final dialogs - use undecorated instead
+    # Add close protection for final dialogs
     if [[ "$is_final" == "true" ]]; then
-        yad_cmd="$yad_cmd --undecorated --fixed"
+        # Use aggressive protection - remove decorations and escape handling
+        yad_cmd="$yad_cmd --undecorated --fixed --modal --keep-above --skip-pager --no-escape"
+        # Override the --no-escape that was set earlier for final dialogs
+        yad_cmd=$(echo "$yad_cmd" | sed 's/--no-escape --/--/' | sed 's/--no-escape//')
+        yad_cmd="$yad_cmd --no-escape"
     fi
     
     yad_cmd="$yad_cmd $buttons"
@@ -82,27 +93,59 @@ yad_send_notification() {
     # Execute with proper environment
     local result=0
     if command -v yad >/dev/null 2>&1; then
-        DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME eval "$yad_cmd" 2>/dev/null || result=$?
+        # For final dialogs, keep showing until user makes a choice
+        if [[ "$is_final" == "true" ]]; then
+            local made_choice=false
+            while [[ "$made_choice" == "false" ]]; do
+                DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME eval "$yad_cmd" 2>/dev/null || result=$?
+                
+                logger -t breaktime "DEBUG: YAD dialog result code: $result for $alarm_name"
+                
+                # Check if user made a valid choice (clicked a button)
+                case $result in
+                    0)
+                        # Suspend Now button
+                        logger -t breaktime "User clicked Suspend Now for $alarm_name"
+                        made_choice=true
+                        # Handle suspend immediately
+                        local action=$(config_get_alarm_action "$alarm_name")
+                        logger -t breaktime "Executing system action: $action for $alarm_name"
+                        # Reset snooze count and clean up jobs
+                        snooze_reset_count "$alarm_name"
+                        snooze_cleanup_jobs "$alarm_name"
+                        # Execute the system action directly
+                        cron_execute_system_action "$action"
+                        ;;
+                    1)
+                        # Snooze button
+                        logger -t breaktime "User clicked Snooze for $alarm_name"
+                        made_choice=true
+                        # Handle snooze immediately
+                        if [[ $(snooze_is_allowed "$alarm_name") == "true" ]]; then
+                            logger -t breaktime "Processing snooze request for $alarm_name"
+                            ${SCRIPT_DIR}/breaktime.sh --snooze-suspend "$alarm_name"
+                        else
+                            logger -t breaktime "Snooze not allowed for $alarm_name"
+                        fi
+                        ;;
+                    *)
+                        # Dialog was closed improperly (Alt+F4, etc.) - show it again
+                        logger -t breaktime "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), reshowing..."
+                        sleep 1  # Brief pause before reshowing
+                        ;;
+                esac
+            done
+        else
+            # Regular warnings - show once
+            DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME eval "$yad_cmd" 2>/dev/null || result=$?
+        fi
         
-        # Handle button responses for interactive dialogs
-        if [[ -n "$buttons" ]]; then
+        # Handle button responses for non-final dialogs (warnings)
+        if [[ -n "$buttons" ]] && [[ "$is_final" != "true" ]]; then
             case $result in
                 0)
-                    # Suspend Now button (only for final notifications)
-                    if [[ "$is_final" == "true" ]]; then
-                        logger -t breaktime "User requested immediate suspend for $alarm_name"
-                        local action=$(config_get_alarm_action "$alarm_name")
-                        ${SCRIPT_DIR}/breaktime.sh --sleep-now "$alarm_name" "$action" &
-                    fi
-                    ;;
-                1)
-                    # Snooze button (only for final notifications with remaining snoozes)
-                    if [[ "$is_final" == "true" ]] && [[ $(snooze_is_allowed "$alarm_name") == "true" ]]; then
-                        logger -t breaktime "User requested snooze for $alarm_name from suspend dialog"
-                        ${SCRIPT_DIR}/breaktime.sh --snooze-suspend "$alarm_name" &
-                    else
-                        logger -t breaktime "Snooze not allowed for $alarm_name (limit reached)"
-                    fi
+                    # OK button for warnings
+                    logger -t breaktime "User acknowledged warning for $alarm_name"
                     ;;
             esac
         fi
