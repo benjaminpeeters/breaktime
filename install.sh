@@ -1,0 +1,240 @@
+#!/bin/bash
+
+# install.sh - Installation script for breaktime
+# Copyright (C) 2025 Benjamin Peeters
+# Licensed under AGPL-3.0
+
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly INSTALL_DIR="${HOME}/bin"
+readonly CONFIG_DIR="${HOME}/.config/breaktime"
+
+# Colors for output
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+usage() {
+    cat << EOF
+${BOLD}Breaktime Installation Script${NC}
+
+${BOLD}USAGE:${NC}
+    ./install.sh [OPTIONS]
+
+${BOLD}OPTIONS:${NC}
+    --uninstall, -u     Uninstall breaktime
+    --help, -h          Show this help message
+
+${BOLD}DESCRIPTION:${NC}
+    Installs breaktime automated break scheduling system:
+    - Creates symlink in ~/bin/
+    - Sets up systemd user service
+    - Creates default configuration
+    - Enables auto-start on login
+
+${BOLD}REQUIREMENTS:${NC}
+    - systemd (for background service)
+    - notify-send (for desktop notifications)
+    - cron (for scheduling)
+EOF
+}
+
+check_requirements() {
+    echo -e "${BOLD}🔍 Checking Requirements${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local missing_requirements=()
+    
+    # Check systemd
+    if command -v systemctl >/dev/null 2>&1; then
+        echo -e "✅ systemd: ${GREEN}Available${NC}"
+    else
+        echo -e "❌ systemd: ${RED}Not available${NC}"
+        missing_requirements+=("systemd")
+    fi
+    
+    # Check cron
+    if command -v crontab >/dev/null 2>&1; then
+        echo -e "✅ cron: ${GREEN}Available${NC}"
+    else
+        echo -e "❌ cron: ${RED}Not available${NC}"
+        missing_requirements+=("cron")
+    fi
+    
+    # Check notify-send (optional but recommended)
+    if command -v notify-send >/dev/null 2>&1; then
+        echo -e "✅ notify-send: ${GREEN}Available${NC}"
+    else
+        echo -e "⚠️  notify-send: ${YELLOW}Not available${NC}"
+        echo -e "   Install with: ${BOLD}sudo apt install libnotify-bin${NC}"
+    fi
+    
+    # Check if ~/bin is in PATH
+    if [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
+        echo -e "✅ ~/bin in PATH: ${GREEN}Yes${NC}"
+    else
+        echo -e "⚠️  ~/bin in PATH: ${YELLOW}No${NC}"
+        echo -e "   Add to your shell profile: ${BOLD}export PATH=\"\$HOME/bin:\$PATH\"${NC}"
+    fi
+    
+    if [[ ${#missing_requirements[@]} -gt 0 ]]; then
+        echo ""
+        echo -e "${RED}❌ Missing required dependencies:${NC}"
+        printf '   - %s\n' "${missing_requirements[@]}"
+        echo ""
+        echo -e "${YELLOW}Install missing dependencies and run again.${NC}"
+        exit 1
+    fi
+    
+    echo ""
+}
+
+install_breaktime() {
+    echo -e "${BOLD}🚀 Installing Breaktime${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Create ~/bin directory if it doesn't exist
+    mkdir -p "${INSTALL_DIR}"
+    
+    # Create symlink to breaktime.sh
+    local breaktime_link="${INSTALL_DIR}/breaktime"
+    if [[ -L "$breaktime_link" ]] || [[ -f "$breaktime_link" ]]; then
+        echo -e "🔄 Removing existing breaktime link..."
+        rm -f "$breaktime_link"
+    fi
+    
+    ln -s "${SCRIPT_DIR}/breaktime.sh" "$breaktime_link"
+    echo -e "✅ Created symlink: ${BLUE}${breaktime_link}${NC}"
+    
+    # Create configuration directory
+    mkdir -p "${CONFIG_DIR}"
+    
+    # Copy default configuration if it doesn't exist
+    local config_file="${CONFIG_DIR}/config.yaml"
+    if [[ ! -f "$config_file" ]]; then
+        cp "${SCRIPT_DIR}/config/default.yaml" "$config_file"
+        echo -e "✅ Created configuration: ${BLUE}${config_file}${NC}"
+    else
+        echo -e "📄 Configuration exists: ${BLUE}${config_file}${NC}"
+    fi
+    
+    # Install systemd service
+    local service_dir="${HOME}/.config/systemd/user"
+    local service_file="${service_dir}/breaktime.service"
+    
+    mkdir -p "$service_dir"
+    cp "${SCRIPT_DIR}/systemd/breaktime.service" "$service_file"
+    
+    # Update service file with correct script path
+    sed -i "s|SCRIPT_PATH|${SCRIPT_DIR}/breaktime.sh|g" "$service_file"
+    
+    echo -e "✅ Installed systemd service: ${BLUE}${service_file}${NC}"
+    
+    # Reload systemd and enable service
+    systemctl --user daemon-reload
+    systemctl --user enable breaktime.service
+    systemctl --user start breaktime.service
+    
+    echo -e "✅ Enabled and started breaktime service"
+    
+    echo ""
+    echo -e "${BOLD}🎉 Installation Complete!${NC}"
+    echo ""
+    echo -e "${BOLD}Next Steps:${NC}"
+    echo "1. Configure your break schedules:"
+    echo "   ${BLUE}breaktime --config${NC}"
+    echo ""
+    echo "2. Check the status:"
+    echo "   ${BLUE}breaktime --status${NC}"
+    echo ""
+    echo "3. Test notifications:"
+    echo "   ${BLUE}breaktime --test-notifications${NC}"
+    echo ""
+    echo -e "${BOLD}Important Notes:${NC}"
+    echo "• Service auto-starts on login"
+    echo "• Configuration: ${BLUE}${config_file}${NC}"
+    echo "• Logs: ${BLUE}journalctl --user -u breaktime${NC}"
+    
+    if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
+        echo ""
+        echo -e "${YELLOW}⚠️  Add ~/bin to your PATH:${NC}"
+        echo "   ${BOLD}echo 'export PATH=\"\$HOME/bin:\$PATH\"' >> ~/.bashrc${NC}"
+        echo "   ${BOLD}source ~/.bashrc${NC}"
+    fi
+}
+
+uninstall_breaktime() {
+    echo -e "${BOLD}🗑️  Uninstalling Breaktime${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Stop and disable service
+    if systemctl --user is-active breaktime.service >/dev/null 2>&1; then
+        systemctl --user stop breaktime.service
+        echo -e "🛑 Stopped breaktime service"
+    fi
+    
+    if systemctl --user is-enabled breaktime.service >/dev/null 2>&1; then
+        systemctl --user disable breaktime.service
+        echo -e "🔄 Disabled breaktime service"
+    fi
+    
+    # Remove service file
+    local service_file="${HOME}/.config/systemd/user/breaktime.service"
+    if [[ -f "$service_file" ]]; then
+        rm -f "$service_file"
+        systemctl --user daemon-reload
+        echo -e "🗑️  Removed systemd service"
+    fi
+    
+    # Remove symlink
+    local breaktime_link="${INSTALL_DIR}/breaktime"
+    if [[ -L "$breaktime_link" ]]; then
+        rm -f "$breaktime_link"
+        echo -e "🗑️  Removed symlink: ${breaktime_link}"
+    fi
+    
+    # Remove cron jobs
+    if command -v crontab >/dev/null 2>&1; then
+        if crontab -l 2>/dev/null | grep -q "breaktime-managed"; then
+            crontab -l 2>/dev/null | grep -v "breaktime-managed" | crontab - 2>/dev/null || true
+            echo -e "🗑️  Removed cron jobs"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✅ Uninstallation complete!${NC}"
+    echo ""
+    echo -e "${YELLOW}Configuration preserved:${NC}"
+    echo "• ${CONFIG_DIR}/"
+    echo ""
+    echo -e "Remove manually if desired:"
+    echo "  ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
+}
+
+main() {
+    case "${1:-}" in
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        --uninstall|-u)
+            uninstall_breaktime
+            exit 0
+            ;;
+        "")
+            check_requirements
+            install_breaktime
+            ;;
+        *)
+            echo -e "${RED}Error:${NC} Unknown option '${1}'" >&2
+            echo "Use ${BOLD}./install.sh --help${NC} for usage information." >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

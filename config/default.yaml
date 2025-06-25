@@ -1,0 +1,109 @@
+# Breaktime Configuration File
+# Automated break scheduling system
+# 
+# Edit this file to customize your break schedules
+# Time format: "HH:MM" (24-hour format)
+# Set to null to disable for specific days
+
+# Global settings
+enabled: true
+default_action: suspend  # suspend, shutdown, hibernate
+
+# Break schedules and notifications
+alarms:
+  bedtime:
+    enabled: true
+    action: suspend
+    weekdays: "23:00"     # Sunday-Thursday bedtime
+    weekends: "00:30"     # Friday-Saturday late bedtime
+    warnings:
+      - minutes: 10
+        message: "🌙 Time to start winding down! Bedtime in 10 minutes"
+      - minutes: 2
+        message: "😴 Save your work! Going to sleep in 2 minutes"
+  
+  lunch_break:
+    enabled: false
+    action: suspend
+    weekdays: "12:30"     # Midday break on workdays
+    weekends: null        # No lunch break on weekends
+    warnings:
+      - minutes: 5
+        message: "🍽️ Lunch break is over! Suspending in 5 minutes"
+      - minutes: 1
+        message: "⏰ Back to work mode - suspending in 1 minute"
+  
+  afternoon_nap:
+    enabled: false
+    action: suspend
+    weekdays: null        # No nap on workdays
+    weekends: "15:00"     # Weekend afternoon nap
+    warnings:
+      - minutes: 5
+        message: "💤 Nap time! System suspending in 5 minutes"
+  
+  focus_break:
+    enabled: false
+    action: suspend
+    weekdays: "16:00"     # End of deep work session
+    weekends: null        # No focus breaks on weekends
+    warnings:
+      - minutes: 3
+        message: "🧠 Deep work session ending - take a break in 3 minutes"
+      - minutes: 1
+        message: "🔄 Time to step away from the screen!"
+
+# Exception dates (override normal schedule)
+exceptions:
+  # Example: New Year's Day later bedtime
+  # - date: "2025-01-01"
+  #   alarms: ["bedtime"]
+  #   time: "01:00"
+  #   action: suspend
+
+# Global notification settings
+notifications:
+  sound_enabled: true
+  desktop_notifications: true
+
+# ============================================================================
+# Configuration Guide:
+# ============================================================================
+# 
+# ALARM STRUCTURE:
+# Each alarm can have:
+# - enabled: true/false
+# - action: suspend/shutdown/hibernate
+# - weekdays: "HH:MM" or null
+# - weekends: "HH:MM" or null
+# - warnings: list of minute/message pairs
+# 
+# TIME FORMAT:
+# Use 24-hour format: "23:00" for 11 PM, "07:30" for 7:30 AM
+# 
+# ACTIONS:
+# - suspend: Put computer to sleep (recommended)
+# - shutdown: Complete shutdown
+# - hibernate: Save to disk and power off
+# 
+# WARNINGS:
+# Configure multiple warnings before each break
+# - minutes: how many minutes before the break
+# - message: custom notification text with emojis
+# 
+# WEEKDAYS vs WEEKENDS:
+# - weekdays: Monday through Friday
+# - weekends: Saturday and Sunday
+# - Use null to disable for specific day types
+# 
+# CUSTOMIZATION TIPS:
+# 1. Start with bedtime only, then add other breaks
+# 2. Use different times for weekdays vs weekends
+# 3. Customize messages to match your workflow
+# 4. Test with short intervals first
+# 
+# COMMANDS:
+# - breaktime --config    Edit this file
+# - breaktime --status    View current schedule
+# - breaktime --install   Set up automatic scheduling
+# ============================================================================

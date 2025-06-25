@@ -1,0 +1,45 @@
+[Unit]
+Description=Breaktime - Automated break scheduling system
+Documentation=https://github.com/benjaminpeeters/breaktime
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=SCRIPT_PATH --daemon
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+
+# Environment
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%i
+Environment=DISPLAY=:0
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=breaktime
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+# Allow access to user configuration
+ReadWritePaths=%h/.config/breaktime
+ReadWritePaths=%h/.cache
+ReadOnlyPaths=%h
+
+[Install]
+WantedBy=default.target
