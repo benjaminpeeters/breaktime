@@ -144,24 +144,24 @@ install_breaktime() {
     echo ""
     echo -e "${BOLD}Next Steps:${NC}"
     echo "1. Configure your break schedules:"
-    echo "   ${BLUE}breaktime --config${NC}"
+    echo -e "   ${BLUE}breaktime --config${NC}"
     echo ""
     echo "2. Check the status:"
-    echo "   ${BLUE}breaktime --status${NC}"
+    echo -e "   ${BLUE}breaktime --status${NC}"
     echo ""
     echo "3. Test notifications:"
-    echo "   ${BLUE}breaktime --test-notifications${NC}"
+    echo -e "   ${BLUE}breaktime --test-notifications${NC}"
     echo ""
     echo -e "${BOLD}Important Notes:${NC}"
     echo "• Service auto-starts on login"
-    echo "• Configuration: ${BLUE}${config_file}${NC}"
-    echo "• Logs: ${BLUE}journalctl --user -u breaktime${NC}"
+    echo -e "• Configuration: ${BLUE}${config_file}${NC}"
+    echo -e "• Logs: ${BLUE}journalctl --user -u breaktime${NC}"
     
     if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
         echo ""
         echo -e "${YELLOW}⚠️  Add ~/bin to your PATH:${NC}"
-        echo "   ${BOLD}echo 'export PATH=\"\$HOME/bin:\$PATH\"' >> ~/.bashrc${NC}"
-        echo "   ${BOLD}source ~/.bashrc${NC}"
+        echo -e "   ${BOLD}echo 'export PATH=\"\$HOME/bin:\$PATH\"' >> ~/.bashrc${NC}"
+        echo -e "   ${BOLD}source ~/.bashrc${NC}"
     fi
 }
 
@@ -207,10 +207,10 @@ uninstall_breaktime() {
     echo -e "${GREEN}✅ Uninstallation complete!${NC}"
     echo ""
     echo -e "${YELLOW}Configuration preserved:${NC}"
-    echo "• ${CONFIG_DIR}/"
+    echo -e "• ${CONFIG_DIR}/"
     echo ""
     echo -e "Remove manually if desired:"
-    echo "  ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
+    echo -e "  ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
 }
 
 main() {
@@ -229,7 +229,7 @@ main() {
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown option '${1}'" >&2
-            echo "Use ${BOLD}./install.sh --help${NC} for usage information." >&2
+            echo -e "Use ${BOLD}./install.sh --help${NC} for usage information." >&2
             exit 1
             ;;
     esac

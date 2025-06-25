@@ -16,7 +16,7 @@ config_edit() {
     local editor="${EDITOR:-nano}"
     
     echo -e "${BOLD}📝 Opening configuration file...${NC}"
-    echo "File: ${BLUE}${CONFIG_FILE}${NC}"
+    echo -e "File: ${BLUE}${CONFIG_FILE}${NC}"
     echo ""
     
     # Open editor

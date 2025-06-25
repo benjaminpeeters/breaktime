@@ -41,8 +41,8 @@ usage() {
     echo "    --uninstall         Remove systemd service and cleanup"
     echo ""
     echo -e "${BOLD}CONFIGURATION:${NC}"
-    echo "    Configuration file: ${CONFIG_FILE}"
-    echo "    Default template:   ${DEFAULT_CONFIG}"
+    echo -e "    Configuration file: ${CONFIG_FILE}"
+    echo -e "    Default template:   ${DEFAULT_CONFIG}"
     echo ""
     echo -e "${BOLD}EXAMPLES:${NC}"
     echo "    breaktime --config      # Edit break schedules"
@@ -83,7 +83,7 @@ main() {
             ;;
         *)
             echo -e "${RED}Error:${NC} Unknown command '${1}'" >&2
-            echo "Use ${BOLD}breaktime --help${NC} for usage information." >&2
+            echo -e "Use ${BOLD}breaktime --help${NC} for usage information." >&2
             exit 1
             ;;
     esac
@@ -141,8 +141,8 @@ install_service() {
     echo -e "✅ Service will auto-start on login"
     echo ""
     echo -e "${BOLD}Next steps:${NC}"
-    echo "1. Run ${BOLD}breaktime --config${NC} to customize your break schedules"
-    echo "2. Run ${BOLD}breaktime --status${NC} to verify everything is working"
+    echo -e "1. Run ${BOLD}breaktime --config${NC} to customize your break schedules"
+    echo -e "2. Run ${BOLD}breaktime --status${NC} to verify everything is working"
 }
 
 uninstall_service() {

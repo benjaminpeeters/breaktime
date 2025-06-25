@@ -144,5 +144,5 @@ notify_test() {
     echo -e "${BOLD}💡 Tips:${NC}"
     echo "• Notifications require a desktop environment"
     echo "• Sounds require PulseAudio or ALSA"
-    echo "• Test with: ${BOLD}notify-send 'Test' 'Hello World'${NC}"
+    echo -e "• Test with: ${BOLD}notify-send 'Test' 'Hello World'${NC}"
 }
