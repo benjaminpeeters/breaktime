@@ -97,7 +97,7 @@ show_status() {
     
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         echo -e "${YELLOW}⚠️  No configuration found${NC}"
-        echo "Run ${BOLD}breaktime --config${NC} to set up your break schedules"
+        echo -e "Run ${BOLD}breaktime --config${NC} to set up your break schedules"
         return 0
     fi
     
@@ -107,7 +107,7 @@ show_status() {
         echo -e "🟢 Service: ${GREEN}Active${NC}"
     else
         echo -e "🔴 Service: ${RED}Inactive${NC}"
-        echo "Run ${BOLD}breaktime --install${NC} to enable automatic scheduling"
+        echo -e "Run ${BOLD}breaktime --install${NC} to enable automatic scheduling"
     fi
     
     echo ""
@@ -166,7 +166,7 @@ uninstall_service() {
     echo -e "✅ Cron jobs removed"
     echo ""
     echo -e "${YELLOW}Note:${NC} Configuration files preserved in ${CONFIG_DIR}"
-    echo "Remove manually if desired: ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
+    echo -e "Remove manually if desired: ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
 }
 
 # Ensure required directories exist

@@ -113,7 +113,7 @@ cron_remove_all() {
 cron_show_next() {
     if ! crontab -l 2>/dev/null | grep -q "${CRON_MARKER}"; then
         echo -e "${YELLOW}   No scheduled breaks found${NC}"
-        echo "   Configure breaks with: ${BOLD}breaktime --config${NC}"
+        echo -e "   Configure breaks with: ${BOLD}breaktime --config${NC}"
         return 0
     fi
     
