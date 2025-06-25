@@ -17,6 +17,7 @@ source "${LIB_DIR}/config.sh"
 source "${LIB_DIR}/cron.sh"
 source "${LIB_DIR}/notify.sh"
 source "${LIB_DIR}/daemon.sh"
+source "${LIB_DIR}/snooze.sh"
 
 # Colors for output
 readonly RED='\033[0;31m'
@@ -36,7 +37,6 @@ usage() {
     echo "    --help, -h          Show this help message"
     echo "    --config, -c        Edit configuration file"
     echo "    --status, -s        Show current status and next scheduled breaks"
-    echo "    --daemon, -d        Run as background daemon (used by systemd)"
     echo "    --install           Install systemd service and setup"
     echo "    --uninstall         Remove systemd service and cleanup"
     echo ""
@@ -171,7 +171,14 @@ uninstall_service() {
 [[ -d "${LIB_DIR}" ]] || { echo "Error: Library directory not found: ${LIB_DIR}" >&2; exit 1; }
 
 # Check if we're being called with special daemon commands
-if [[ "${1:-}" =~ ^--(warn|execute|test-notifications)$ ]]; then
+if [[ "${1:-}" =~ ^--(warn|execute|test-notifications|snooze|sleep-now|snooze-suspend)$ ]]; then
+    # Load libraries needed for daemon commands
+    source "${LIB_DIR}/config.sh"
+    source "${LIB_DIR}/cron.sh"
+    source "${LIB_DIR}/notify.sh"
+    source "${LIB_DIR}/daemon.sh"
+    source "${LIB_DIR}/snooze.sh"
+    
     daemon_handle_command "$@"
     exit 0
 fi

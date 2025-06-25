@@ -5,7 +5,9 @@
 # Licensed under AGPL-3.0
 
 # Cron job marker for easy identification
-readonly CRON_MARKER="# breaktime-managed"
+if [[ -z "${CRON_MARKER:-}" ]]; then
+    readonly CRON_MARKER="# breaktime-managed"
+fi
 
 cron_update_from_config() {
     echo -e "${BOLD}🔄 Updating cron jobs from configuration...${NC}"
@@ -19,16 +21,23 @@ cron_update_from_config() {
     # Remove existing breaktime cron jobs
     cron_remove_all
     
+    # Clean up old snooze state files and reset counts for new day
+    snooze_cleanup
+    
     # Add new cron jobs for enabled alarms
     local alarm_count=0
     while read -r alarm_name; do
         if [[ -n "$alarm_name" ]] && [[ $(config_get_alarm_enabled "$alarm_name") == "true" ]]; then
-            cron_add_alarm "$alarm_name"
-            ((alarm_count++))
+            if cron_add_alarm "$alarm_name"; then
+                ((alarm_count++))
+            else
+                echo -e "${RED}❌ Failed to add alarm: ${alarm_name}${NC}" >&2
+            fi
         fi
     done < <(config_get_alarms)
     
     echo -e "${GREEN}✅ Updated ${alarm_count} cron jobs${NC}"
+    return 0
 }
 
 cron_add_alarm() {
@@ -36,6 +45,7 @@ cron_add_alarm() {
     local weekday_time=$(config_get_alarm_time "$alarm_name" "weekdays")
     local weekend_time=$(config_get_alarm_time "$alarm_name" "weekends")
     local action=$(config_get_alarm_action "$alarm_name")
+    local new_jobs=""
     
     # Add weekday schedule if defined
     if [[ -n "$weekday_time" ]]; then
@@ -50,12 +60,12 @@ cron_add_alarm() {
                 local warn_hour=$(echo "$warn_time" | cut -d: -f1)
                 local warn_minute=$(echo "$warn_time" | cut -d: -f2)
                 
-                (crontab -l 2>/dev/null || true; echo "${warn_minute} ${warn_hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}") | crontab -
+                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 1-5 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}\n"
             fi
         done < <(config_get_alarm_warnings "$alarm_name")
         
         # Schedule main action
-        (crontab -l 2>/dev/null || true; echo "${minute} ${hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}") | crontab -
+        new_jobs="${new_jobs}${minute} ${hour} * * 1-5 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}\n"
     fi
     
     # Add weekend schedule if defined
@@ -71,12 +81,20 @@ cron_add_alarm() {
                 local warn_hour=$(echo "$warn_time" | cut -d: -f1)
                 local warn_minute=$(echo "$warn_time" | cut -d: -f2)
                 
-                (crontab -l 2>/dev/null || true; echo "${warn_minute} ${warn_hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}") | crontab -
+                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 6,0 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}\n"
             fi
         done < <(config_get_alarm_warnings "$alarm_name")
         
         # Schedule main action
-        (crontab -l 2>/dev/null || true; echo "${minute} ${hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}") | crontab -
+        new_jobs="${new_jobs}${minute} ${hour} * * 6,0 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}\n"
+    fi
+    
+    # Add all new jobs at once
+    if [[ -n "$new_jobs" ]]; then
+        {
+            crontab -l 2>/dev/null || true
+            echo -e "${new_jobs%\\n}"  # Remove trailing newline
+        } | crontab - 2>/dev/null || true
     fi
 }
 
@@ -105,8 +123,19 @@ cron_calculate_warning_time() {
 
 cron_remove_all() {
     # Remove all breaktime-managed cron jobs
-    if crontab -l 2>/dev/null | grep -v "${CRON_MARKER}" | crontab - 2>/dev/null; then
+    local current_crontab=$(crontab -l 2>/dev/null || true)
+    if [[ -n "$current_crontab" ]]; then
+        echo "$current_crontab" | grep -v "${CRON_MARKER}" | crontab - 2>/dev/null || true
         echo -e "${GREEN}✅ Removed existing breaktime cron jobs${NC}"
+    fi
+}
+
+cron_remove_alarm_jobs() {
+    local alarm_name="$1"
+    # Remove all cron jobs for a specific alarm (both regular and snooze jobs)
+    local current_crontab=$(crontab -l 2>/dev/null || true)
+    if [[ -n "$current_crontab" ]]; then
+        echo "$current_crontab" | grep -v "breaktime-managed.*${alarm_name}" | grep -v "breaktime-managed-snooze-${alarm_name}" | crontab - 2>/dev/null || true
     fi
 }
 
@@ -158,6 +187,12 @@ cron_execute_warning() {
 cron_execute_action() {
     local alarm_name="$1"
     local action="$2"
+    
+    # Reset snooze count since we're executing the action
+    snooze_reset_count "$alarm_name"
+    
+    # Clean up any pending snooze jobs
+    snooze_cleanup_jobs "$alarm_name"
     
     # Send final notification
     notify_send_final "$alarm_name" "$action"

@@ -63,7 +63,44 @@ check_requirements() {
         missing_requirements+=("cron")
     fi
     
-    # Check notify-send (optional but recommended)
+    # Check and install 'at' command (for snooze functionality)
+    if command -v at >/dev/null 2>&1; then
+        echo -e "✅ at: ${GREEN}Available${NC}"
+    else
+        echo -e "⚠️  at: ${YELLOW}Not available - installing...${NC}"
+        if sudo apt update && sudo apt install -y at; then
+            echo -e "✅ at: ${GREEN}Installed successfully${NC}"
+            # Enable atd service
+            sudo systemctl enable atd
+            sudo systemctl start atd
+        else
+            echo -e "❌ at: ${RED}Failed to install${NC}"
+            missing_requirements+=("at")
+        fi
+    fi
+    
+    # Check and install YAD (preferred notification system)
+    if command -v yad >/dev/null 2>&1; then
+        echo -e "✅ yad: ${GREEN}Available${NC}"
+    else
+        echo -e "⚠️  yad: ${YELLOW}Not available - installing...${NC}"
+        if sudo apt update && sudo apt install -y yad; then
+            echo -e "✅ yad: ${GREEN}Installed successfully${NC}"
+        else
+            echo -e "❌ yad: ${RED}Failed to install${NC}"
+            missing_requirements+=("yad")
+        fi
+    fi
+    
+    # Check zenity (fallback notification system)
+    if command -v zenity >/dev/null 2>&1; then
+        echo -e "✅ zenity: ${GREEN}Available${NC}"
+    else
+        echo -e "⚠️  zenity: ${YELLOW}Not available${NC}"
+        echo -e "   Install with: ${BOLD}sudo apt install zenity${NC}"
+    fi
+    
+    # Check notify-send (secondary fallback)
     if command -v notify-send >/dev/null 2>&1; then
         echo -e "✅ notify-send: ${GREEN}Available${NC}"
     else

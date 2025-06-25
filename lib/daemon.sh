@@ -7,6 +7,9 @@
 daemon_run() {
     echo "Starting breaktime daemon..." | logger -t breaktime
     
+    # Initialize snooze system
+    snooze_init
+    
     # Ensure configuration exists
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         echo "No configuration found, creating default..." | logger -t breaktime
@@ -16,8 +19,11 @@ daemon_run() {
     
     # Initial setup of cron jobs
     if [[ $(config_get_enabled) == "true" ]]; then
-        cron_update_from_config
-        echo "Cron jobs updated from configuration" | logger -t breaktime
+        if cron_update_from_config; then
+            echo "Cron jobs updated from configuration" | logger -t breaktime
+        else
+            echo "Failed to update cron jobs" | logger -t breaktime
+        fi
     else
         echo "Breaktime disabled in configuration" | logger -t breaktime
     fi
@@ -72,6 +78,15 @@ daemon_handle_command() {
         --execute)
             cron_execute_action "$2" "$3"
             ;;
+        --snooze)
+            daemon_handle_snooze "$2" "$3"
+            ;;
+        --snooze-suspend)
+            daemon_handle_snooze_suspend "$2"
+            ;;
+        --sleep-now)
+            daemon_handle_sleep_now "$2" "$3"
+            ;;
         --test-notifications)
             notify_test
             ;;
@@ -80,5 +95,98 @@ daemon_handle_command() {
             exit 1
             ;;
     esac
+}
+
+# Handle snooze request
+daemon_handle_snooze() {
+    local alarm_name="$1"
+    local original_time="$2"  # HH:MM format
+    
+    logger -t breaktime "Snooze requested for $alarm_name at $original_time"
+    
+    # Increment snooze count
+    local new_count=$(snooze_increment_count "$alarm_name")
+    local max_snoozes=$(snooze_get_max)
+    local snooze_duration=$(snooze_get_duration)
+    
+    # Calculate new time after snooze (from current time, not original time)
+    local current_hour=$(date +%H)
+    local current_minute=$(date +%M)
+    local new_time=$(snooze_calculate_new_time "$current_hour" "$current_minute")
+    local new_hour=$(echo "$new_time" | cut -d: -f1)
+    local new_minute=$(echo "$new_time" | cut -d: -f2)
+    
+    # Calculate warning time (2 minutes before new suspend time)
+    local warn_time=$(cron_calculate_warning_time "$new_hour" "$new_minute" "2")
+    local warn_hour=$(echo "$warn_time" | cut -d: -f1)
+    local warn_minute=$(echo "$warn_time" | cut -d: -f2)
+    
+    # Get action for this alarm
+    local action=$(config_get_alarm_action "$alarm_name")
+    
+    # Use 'at' command to schedule one-time jobs (preserving original cron schedule)
+    # Schedule warning
+    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"2\"" | at "${warn_hour}:${warn_minute}" 2>/dev/null || true
+    
+    # Schedule suspend
+    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
+    
+    logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled one-time jobs for $new_time (warning at $warn_time)"
+    
+    # Store snooze job info for potential cleanup
+    snooze_store_job_info "$alarm_name" "$new_time" "$warn_time"
+}
+
+# Handle immediate sleep request
+daemon_handle_sleep_now() {
+    local alarm_name="$1"
+    local action="$2"
+    
+    logger -t breaktime "Immediate sleep requested for $alarm_name with action $action"
+    
+    # Reset snooze count since we're executing now
+    snooze_reset_count "$alarm_name"
+    
+    # Clean up any pending snooze jobs (but keep original cron schedule)
+    snooze_cleanup_jobs "$alarm_name"
+    
+    # Execute the action immediately
+    cron_execute_action "$alarm_name" "$action"
+}
+
+# Handle snooze request from suspend dialog
+daemon_handle_snooze_suspend() {
+    local alarm_name="$1"
+    
+    logger -t breaktime "Snooze from suspend dialog requested for $alarm_name"
+    
+    # Check if snoozing is still allowed
+    if [[ $(snooze_is_allowed "$alarm_name") != "true" ]]; then
+        logger -t breaktime "Snooze limit reached for $alarm_name, ignoring snooze request"
+        return 1
+    fi
+    
+    # Increment snooze count
+    local new_count=$(snooze_increment_count "$alarm_name")
+    local max_snoozes=$(snooze_get_max)
+    local snooze_duration=$(snooze_get_duration)
+    
+    # Calculate new suspend time (from current time)
+    local current_hour=$(date +%H)
+    local current_minute=$(date +%M)
+    local new_time=$(snooze_calculate_new_time "$current_hour" "$current_minute")
+    local new_hour=$(echo "$new_time" | cut -d: -f1)
+    local new_minute=$(echo "$new_time" | cut -d: -f2)
+    
+    # Get action for this alarm
+    local action=$(config_get_alarm_action "$alarm_name")
+    
+    # Use 'at' command to schedule another suspend dialog
+    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
+    
+    logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled suspend dialog for $new_time"
+    
+    # Store snooze job info for potential cleanup
+    snooze_store_job_info "$alarm_name" "$new_time" ""
 }
 

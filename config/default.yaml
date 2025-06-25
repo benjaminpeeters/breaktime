@@ -66,6 +66,11 @@ notifications:
   sound_enabled: true
   desktop_notifications: true
 
+# Snooze settings for 2-minute warnings
+snooze:
+  max_snoozes: 3        # Maximum number of snoozes allowed per alarm
+  snooze_duration: 2    # Minutes to delay each snooze
+
 # ============================================================================
 # Configuration Guide:
 # ============================================================================
@@ -96,11 +101,18 @@ notifications:
 # - weekends: Saturday and Sunday
 # - Use null to disable for specific day types
 # 
+# SNOOZE FEATURE:
+# - Only applies to 2-minute warnings (final warning)
+# - Each snooze delays the suspend by the configured duration
+# - After max snoozes, only "OK" and "Sleep Now" buttons appear
+# - Snooze settings apply globally to all alarms
+# 
 # CUSTOMIZATION TIPS:
 # 1. Start with bedtime only, then add other breaks
 # 2. Use different times for weekdays vs weekends
 # 3. Customize messages to match your workflow
 # 4. Test with short intervals first
+# 5. Adjust max_snoozes based on your workflow needs
 # 
 # COMMANDS:
 # - breaktime --config    Edit this file

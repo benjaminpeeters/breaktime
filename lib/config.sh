@@ -81,12 +81,11 @@ config_get_alarms() {
         return
     fi
     
-    # Extract alarm names using basic bash parsing
-    # This is a simplified parser - assumes standard YAML formatting
-    sed -n '/^alarms:/,/^[[:alpha:]]/p' "${CONFIG_FILE}" | \
-        grep "^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:" | \
-        sed 's/^[[:space:]]*//' | \
-        sed 's/:.*$//'
+    # Extract alarm names - find lines that are directly under alarms with 2-space indent
+    sed -n '/^alarms:/,/^[a-zA-Z]/p' "${CONFIG_FILE}" | \
+    grep "^  [a-zA-Z_][a-zA-Z0-9_]*:" | \
+    sed 's/^  //' | \
+    sed 's/:.*$//'
 }
 
 config_get_alarm_enabled() {
@@ -101,7 +100,7 @@ config_get_alarm_enabled() {
     local enabled="false"
     
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*${alarm_name}:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]+${alarm_name}:[[:space:]]*$ ]]; then
             in_alarm=true
             continue
         elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
@@ -128,7 +127,7 @@ config_get_alarm_time() {
     local time=""
     
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*${alarm_name}:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]+${alarm_name}:[[:space:]]*$ ]]; then
             in_alarm=true
             continue
         elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
@@ -157,7 +156,7 @@ config_get_alarm_action() {
     local action="suspend"
     
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*${alarm_name}:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]+${alarm_name}:[[:space:]]*$ ]]; then
             in_alarm=true
             continue
         elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
@@ -183,10 +182,11 @@ config_get_alarm_warnings() {
     local warnings=()
     
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*${alarm_name}:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]+${alarm_name}:[[:space:]]*$ ]]; then
             in_alarm=true
             continue
-        elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
+        elif [[ "$line" =~ ^[[:space:]]{2}[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
+            # Found another alarm at same level - end of current alarm
             break
         elif [[ "$in_alarm" == true ]] && [[ "$line" =~ ^[[:space:]]*warnings:[[:space:]]*$ ]]; then
             in_warnings=true
@@ -194,8 +194,7 @@ config_get_alarm_warnings() {
         elif [[ "$in_warnings" == true ]] && [[ "$line" =~ ^[[:space:]]*-[[:space:]]*minutes:[[:space:]]*(.*) ]]; then
             local minutes=$(echo "${BASH_REMATCH[1]}" | tr -d '"' | tr -d "'" | xargs)
             warnings+=("$minutes")
-        elif [[ "$in_warnings" == true ]] && [[ "$line" =~ ^[[:space:]]*[a-zA-Z_] ]]; then
-            break
+        # Skip message lines and other warning details
         fi
     done < "${CONFIG_FILE}"
     
@@ -220,7 +219,7 @@ config_get_warning_message() {
     local message=""
     
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*${alarm_name}:[[:space:]]*$ ]]; then
+        if [[ "$line" =~ ^[[:space:]]+${alarm_name}:[[:space:]]*$ ]]; then
             in_alarm=true
             continue
         elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_alarm" == true ]]; then
@@ -247,4 +246,24 @@ config_get_warning_message() {
     fi
     
     echo "$message"
+}
+
+config_get_snooze_max() {
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        echo "3"  # default
+        return
+    fi
+    
+    local max_snoozes=$(grep "^[[:space:]]*max_snoozes:" "${CONFIG_FILE}" | sed 's/.*max_snoozes:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+    echo "${max_snoozes:-3}"
+}
+
+config_get_snooze_duration() {
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        echo "2"  # default
+        return
+    fi
+    
+    local duration=$(grep "^[[:space:]]*snooze_duration:" "${CONFIG_FILE}" | sed 's/.*snooze_duration:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
+    echo "${duration:-2}"
 }

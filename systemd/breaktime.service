@@ -21,25 +21,12 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=breaktime
 
-# Security settings
+# Security settings (relaxed for user service)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=false
 PrivateTmp=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictNamespaces=true
-LockPersonality=true
-MemoryDenyWriteExecute=false
-RestrictRealtime=true
-RestrictSUIDSGID=true
-RemoveIPC=true
 
-# Allow access to user configuration
+# Allow access to user configuration and crontab
 ReadWritePaths=%h/.config/breaktime
-ReadWritePaths=%h/.cache
-ReadOnlyPaths=%h
 
 [Install]
 WantedBy=default.target
