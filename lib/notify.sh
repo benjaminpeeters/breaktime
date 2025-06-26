@@ -29,7 +29,8 @@ yad_send_notification() {
     if [[ "$is_final" == "true" ]]; then
         dialog_type="--warning"
         timeout=0  # No timeout - persistent dialog
-        width=600
+        width=660
+        height=280
         
         # Check snooze availability for final suspend dialog
         local remaining_snoozes=$(snooze_get_remaining "$alarm_name")
@@ -40,12 +41,12 @@ yad_send_notification() {
         if [[ $remaining_snoozes -gt 0 ]]; then
             # Show both remaining and used counts for clarity
             buttons="--button=\"Suspend Now\":0 --button=\"Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left)\":1"
-            # Add snooze info to message
-            message="$message\n\n📊 Snooze status: Used ${current_count}/${max_snoozes}"
+            # Add snooze info to message with larger font using simple Pango markup
+            message="<span size='large'>${message}\n\n📊 Snooze status: Used ${current_count}/${max_snoozes}</span>"
         else
             buttons="--button=\"Suspend Now\":0"
-            # Show that snooze limit is reached
-            message="$message\n\n🚫 Snooze limit reached (${max_snoozes}/${max_snoozes})"
+            # Show that snooze limit is reached with larger font
+            message="<span size='large'>${message}\n\n🚫 Snooze limit reached (${max_snoozes}/${max_snoozes})</span>"
         fi
     elif [[ $minutes -le 2 ]]; then
         dialog_type="--info"
@@ -58,43 +59,52 @@ yad_send_notification() {
         buttons="--button=OK:0"
     fi
     
-    # Determine icon based on alarm type
+    # Determine icon based on alarm type (empty for final dialogs to remove default icon)
     local icon="dialog-information"
-    case "$alarm_name" in
-        "bedtime")
-            icon="night-light"
-            ;;
-        "lunch_break")
-            icon="applications-dining"
-            ;;
-        "afternoon_nap"|"focus_break")
-            icon="appointment-soon"
-            ;;
-    esac
+    if [[ "$is_final" == "true" ]]; then
+        icon=""  # No icon for suspend dialogs
+    else
+        case "$alarm_name" in
+            "bedtime")
+                icon="night-light"
+                ;;
+            "lunch_break")
+                icon="applications-dining"
+                ;;
+            "afternoon_nap"|"focus_break")
+                icon="appointment-soon"
+                ;;
+        esac
+    fi
     
-    # Create YAD command with your preferred styling
+    # Create YAD command with improved styling
     local yad_cmd="yad $dialog_type \
         --text=\"$message\" \
         --title=\"Breaktime - $(format_alarm_name "$alarm_name")\" \
-        --borders=20 \
+        --borders=30 \
         --timeout=$timeout \
         --center \
         --on-top \
         --no-escape \
         --width=$width \
-        --image=\"$icon\" \
         --skip-taskbar \
         --window-icon=\"clock\" \
         --sticky \
         --always-print-result"
     
-    # Add close protection for final dialogs
+    # Add icon only if not empty (for final dialogs we skip the icon)
+    if [[ -n "$icon" ]]; then
+        yad_cmd="$yad_cmd --image=\"$icon\""
+    fi
+    
+    # Add close protection and styling for final dialogs
     if [[ "$is_final" == "true" ]]; then
         # Use aggressive protection - remove decorations and escape handling
         yad_cmd="$yad_cmd --undecorated --fixed --modal --keep-above --skip-pager --no-escape"
         # Override the --no-escape that was set earlier for final dialogs
         yad_cmd=$(echo "$yad_cmd" | sed 's/--no-escape --/--/' | sed 's/--no-escape//')
-        yad_cmd="$yad_cmd --no-escape"
+        # Add sizing and styling for final dialogs
+        yad_cmd="$yad_cmd --no-escape --height=$height --text-align=center"
     fi
     
     yad_cmd="$yad_cmd $buttons"
