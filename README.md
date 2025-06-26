@@ -7,13 +7,16 @@ Breaktime helps you maintain a healthy work-life balance by automatically schedu
 ## Features
 
 - 🌙 **Bedtime enforcement** - Automatic suspend/shutdown at configured times
-- 🍽️ **Lunch breaks** - Midday work interruptions
+- 🍽️ **Lunch breaks** - Midday work interruptions  
 - 💤 **Afternoon naps** - Weekend rest periods
 - 🧠 **Focus breaks** - End of deep work sessions
 - ⚡ **Flexible scheduling** - Different times for weekdays vs weekends
-- 🔔 **Smart notifications** - Customizable warnings before each break
-- 🔄 **Background service** - Runs automatically on login
+- 🔔 **Smart notifications** - YAD-based dialogs with interactive buttons
+- ⏰ **Snooze functionality** - Limited snoozes with countdown display
+- 🔕 **Silent mode** - Auto-execute when desktop notifications disabled
+- 🔄 **Background service** - Runs automatically on login with 30-second polling
 - ⚙️ **YAML configuration** - Easy to customize and version control
+- 🛡️ **Persistent dialogs** - Cannot be dismissed accidentally (Alt+F4 protection)
 
 ## Quick Start
 
@@ -60,6 +63,15 @@ Breaktime uses a YAML configuration file at `~/.config/breaktime/config.yaml`:
 enabled: true
 default_action: suspend  # suspend, shutdown, hibernate
 
+# Global notification settings
+notifications:
+  desktop_notifications: true  # Set to false for auto-execute mode
+
+# Snooze settings for final warnings
+snooze:
+  max_snoozes: 3        # Maximum number of snoozes allowed per alarm
+  snooze_duration: 2    # Minutes to delay each snooze
+
 alarms:
   bedtime:
     enabled: true
@@ -86,6 +98,18 @@ alarms:
 - **shutdown**: Complete shutdown
 - **hibernate**: Save to disk and power off
 
+### Notification Settings
+
+- **desktop_notifications: true** - Show YAD dialogs with snooze options
+- **desktop_notifications: false** - Auto-execute actions without dialogs (silent mode)
+
+### Snooze System
+
+- **max_snoozes** - Maximum number of snoozes per alarm (default: 3)
+- **snooze_duration** - Minutes to delay each snooze (default: 2)
+- Snooze counts reset daily and only apply to final suspend dialogs
+- Uses reliable file-based scheduling system (no dependency on `at` daemon)
+
 ### Time Format
 
 Use 24-hour format: `"23:00"` for 11 PM, `"07:30"` for 7:30 AM.
@@ -103,7 +127,9 @@ The install script:
 
 - **systemd** - For background service management
 - **cron** - For scheduling break actions
-- **notify-send** - For desktop notifications (optional)
+- **yad** - For interactive dialog notifications (recommended)
+- **zenity** - Fallback for notifications if YAD unavailable
+- **notify-send** - Last resort for basic notifications
 
 ## File Structure
 
@@ -113,8 +139,9 @@ breaktime/
 ├── lib/                   # Library modules
 │   ├── config.sh         # Configuration management
 │   ├── cron.sh           # Cron job management
-│   ├── notify.sh         # Notification system
-│   └── daemon.sh         # Background service
+│   ├── notify.sh         # YAD-based notification system
+│   ├── snooze.sh         # File-based snooze job management
+│   └── daemon.sh         # Background service with 30s polling
 ├── config/
 │   └── default.yaml      # Default configuration template
 ├── systemd/
@@ -157,14 +184,35 @@ Breaktime automatically manages cron jobs based on your configuration. All break
    ```
 
 ### Notifications not showing
-1. Install desktop notification support:
+1. Install YAD for best experience:
    ```bash
-   sudo apt install libnotify-bin
+   sudo apt install yad
    ```
 
-2. Test notifications manually:
+2. Install fallback notification support:
    ```bash
-   notify-send "Test" "Hello World"
+   sudo apt install zenity libnotify-bin
+   ```
+
+3. Test notifications manually:
+   ```bash
+   breaktime --test-notifications
+   ```
+
+### Snooze not working
+1. Check if snooze jobs are being created:
+   ```bash
+   ls ~/.cache/breaktime/pending/
+   ```
+
+2. Check daemon logs for errors:
+   ```bash
+   journalctl --user -u breaktime -f | grep snooze
+   ```
+
+3. Verify service is polling every 30 seconds:
+   ```bash
+   systemctl --user status breaktime
    ```
 
 ### Cron jobs not working

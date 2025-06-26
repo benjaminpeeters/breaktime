@@ -39,7 +39,15 @@ daemon_run() {
             cron_remove_all
         fi
         
-        sleep 60  # Check every minute
+        # Check for pending snooze jobs (NEW file-based system)
+        snooze_check_pending
+        
+        # Clean up old completed jobs periodically
+        if [[ $(($(date +%s) % 3600)) -lt 30 ]]; then  # Once per hour
+            snooze_cleanup_completed
+        fi
+        
+        sleep 30  # Check every 30 seconds for better responsiveness
     done
 }
 
@@ -125,11 +133,26 @@ daemon_handle_snooze() {
     local action=$(config_get_alarm_action "$alarm_name")
     
     # Use 'at' command to schedule one-time jobs (preserving original cron schedule)
+    # SCRIPT_DIR must be expanded when creating the command
+    local breaktime_path="${SCRIPT_DIR:-/home/bpeeters/MEGA/repo/bash/breaktime}/breaktime.sh"
+    logger -t breaktime "DEBUG: Using breaktime path: $breaktime_path"
+    
     # Schedule warning
-    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"2\"" | at "${warn_hour}:${warn_minute}" 2>/dev/null || true
+    local at_output
+    at_output=$(echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${breaktime_path} --warn \"${alarm_name}\" \"2\"" | at "${warn_hour}:${warn_minute}" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        logger -t breaktime "Scheduled warning at ${warn_hour}:${warn_minute}: $at_output"
+    else
+        logger -t breaktime "ERROR: Failed to schedule warning at ${warn_hour}:${warn_minute}: $at_output"
+    fi
     
     # Schedule suspend
-    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
+    at_output=$(echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${breaktime_path} --execute \"${alarm_name}\" \"${action}\"" | at "${new_hour}:${new_minute}" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        logger -t breaktime "Scheduled suspend at ${new_hour}:${new_minute}: $at_output"
+    else
+        logger -t breaktime "ERROR: Failed to schedule suspend at ${new_hour}:${new_minute}: $at_output"
+    fi
     
     logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled one-time jobs for $new_time (warning at $warn_time)"
     
@@ -177,22 +200,16 @@ daemon_handle_snooze_suspend() {
     
     logger -t breaktime "DEBUG: Incremented snooze count to $new_count/$max_snoozes"
     
-    # Calculate new suspend time (from current time)
-    local current_hour=$(date +%H)
-    local current_minute=$(date +%M)
-    local new_time=$(snooze_calculate_new_time "$current_hour" "$current_minute")
-    local new_hour=$(echo "$new_time" | cut -d: -f1)
-    local new_minute=$(echo "$new_time" | cut -d: -f2)
+    # Calculate target execution time (current time + snooze duration)
+    local current_time=$(date +%s)
+    local target_time=$((current_time + snooze_duration * 60))
     
     # Get action for this alarm
     local action=$(config_get_alarm_action "$alarm_name")
     
-    # Use 'at' command to schedule another suspend dialog (with snoozed flag)
-    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" \"true\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
+    # Use NEW file-based scheduling (much more reliable than 'at' commands)
+    local job_file=$(snooze_schedule_job "$alarm_name" "$target_time" "$action" "$new_count")
     
-    logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled suspend dialog for $new_time"
-    
-    # Store snooze job info for potential cleanup
-    snooze_store_job_info "$alarm_name" "$new_time" ""
+    logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled file-based job $(basename "$job_file") for $(date -d "@$target_time" '+%H:%M:%S')"
 }
 

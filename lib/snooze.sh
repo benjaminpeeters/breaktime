@@ -11,6 +11,8 @@ fi
 
 snooze_init() {
     mkdir -p "${SNOOZE_STATE_DIR}"
+    mkdir -p "${SNOOZE_STATE_DIR}/pending"
+    mkdir -p "${SNOOZE_STATE_DIR}/completed"
 }
 
 # Get current snooze count for an alarm
@@ -165,4 +167,83 @@ snooze_cleanup() {
         find "${SNOOZE_STATE_DIR}" -name "*.count" -type f -mtime +1 -delete 2>/dev/null || true
         find "${SNOOZE_STATE_DIR}" -name "*.jobs" -type f -mtime +1 -delete 2>/dev/null || true
     fi
+}
+
+# NEW FILE-BASED SNOOZE SYSTEM (replaces fragile 'at' commands)
+
+# Schedule a snooze job using simple file system
+snooze_schedule_job() {
+    local alarm_name="$1"
+    local target_timestamp="$2"  # Unix timestamp when to execute
+    local action="$3"
+    local snooze_count="$4"
+    
+    local job_file="${SNOOZE_STATE_DIR}/pending/${alarm_name}_${target_timestamp}.job"
+    
+    # Create job file with all needed info
+    cat > "$job_file" <<EOF
+ALARM_NAME="${alarm_name}"
+TARGET_TIME="${target_timestamp}"
+ACTION="${action}"
+SNOOZE_COUNT="${snooze_count}"
+CREATED="$(date '+%Y-%m-%d %H:%M:%S')"
+EOF
+    
+    logger -t breaktime "Scheduled snooze job: $job_file (execute at $(date -d "@$target_timestamp" '+%H:%M:%S'))"
+    echo "$job_file"
+}
+
+# Check for pending snooze jobs and execute ready ones
+snooze_check_pending() {
+    local current_time=$(date +%s)
+    
+    # Check all pending job files
+    for job_file in "${SNOOZE_STATE_DIR}/pending"/*.job; do
+        [[ -f "$job_file" ]] || continue
+        
+        # Read job details
+        local alarm_name action target_time snooze_count
+        source "$job_file" 2>/dev/null || continue
+        
+        alarm_name="$ALARM_NAME"
+        action="$ACTION"
+        target_time="$TARGET_TIME"
+        snooze_count="$SNOOZE_COUNT"
+        
+        # Check if it's time to execute
+        if [[ $current_time -ge $target_time ]]; then
+            logger -t breaktime "Executing pending snooze job: $alarm_name (count: $snooze_count)"
+            
+            # Execute the job
+            snooze_execute_job "$alarm_name" "$action" "$snooze_count"
+            
+            # Move to completed
+            local completed_file="${SNOOZE_STATE_DIR}/completed/$(basename "$job_file")"
+            mv "$job_file" "$completed_file" 2>/dev/null || rm -f "$job_file"
+        fi
+    done
+}
+
+# Execute a snooze job (show suspend dialog)
+snooze_execute_job() {
+    local alarm_name="$1"
+    local action="$2"
+    local snooze_count="$3"
+    
+    logger -t breaktime "Executing snooze job: $alarm_name with action $action (snooze count: $snooze_count)"
+    
+    # Set the current snooze count before showing dialog
+    snooze_set_count "$alarm_name" "$snooze_count"
+    
+    # Execute the final notification dialog (this handles user interaction)
+    notify_send_final "$alarm_name" "$action"
+}
+
+# Clean up old completed jobs (keep last 10)
+snooze_cleanup_completed() {
+    local completed_dir="${SNOOZE_STATE_DIR}/completed"
+    [[ -d "$completed_dir" ]] || return
+    
+    # Remove files older than 24 hours
+    find "$completed_dir" -name "*.job" -mtime +1 -delete 2>/dev/null || true
 }
