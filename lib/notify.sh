@@ -20,7 +20,7 @@ yad_send_notification() {
     if [[ "$is_final" == "true" ]]; then
         dialog_type="--warning"
         timeout=0  # No timeout - persistent dialog
-        width=450
+        width=600
         
         # Check snooze availability for final suspend dialog
         local remaining_snoozes=$(snooze_get_remaining "$alarm_name")

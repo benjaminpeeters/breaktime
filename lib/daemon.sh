@@ -76,7 +76,7 @@ daemon_handle_command() {
             cron_execute_warning "$2" "$3"
             ;;
         --execute)
-            cron_execute_action "$2" "$3"
+            cron_execute_action "$2" "$3" "${4:-false}"
             ;;
         --snooze)
             daemon_handle_snooze "$2" "$3"
@@ -187,8 +187,8 @@ daemon_handle_snooze_suspend() {
     # Get action for this alarm
     local action=$(config_get_alarm_action "$alarm_name")
     
-    # Use 'at' command to schedule another suspend dialog
-    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
+    # Use 'at' command to schedule another suspend dialog (with snoozed flag)
+    echo "DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" \"true\"" | at "${new_hour}:${new_minute}" 2>/dev/null || true
     
     logger -t breaktime "Snooze $new_count/$max_snoozes: scheduled suspend dialog for $new_time"
     

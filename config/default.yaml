@@ -63,7 +63,6 @@ exceptions:
 
 # Global notification settings
 notifications:
-  sound_enabled: true
   desktop_notifications: true
 
 # Snooze settings for 2-minute warnings

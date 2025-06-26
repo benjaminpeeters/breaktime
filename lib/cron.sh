@@ -180,22 +180,51 @@ cron_execute_warning() {
     local alarm_name="$1"
     local warning_minutes="$2"
     
-    local message=$(config_get_warning_message "$alarm_name" "$warning_minutes")
-    notify_send_warning "$alarm_name" "$message" "$warning_minutes"
+    # Check if desktop notifications are enabled
+    local desktop_notifications=$(config_get_desktop_notifications)
+    
+    if [[ "$desktop_notifications" == "false" ]]; then
+        # Just log, don't show notification
+        logger -t breaktime "Warning suppressed (notifications disabled): $alarm_name in $warning_minutes minutes"
+    else
+        local message=$(config_get_warning_message "$alarm_name" "$warning_minutes")
+        notify_send_warning "$alarm_name" "$message" "$warning_minutes"
+    fi
 }
 
 cron_execute_action() {
     local alarm_name="$1"
     local action="$2"
+    local is_snoozed="${3:-false}"  # New parameter to indicate if this is from a snooze
     
-    # Reset snooze count since we're executing the action
-    snooze_reset_count "$alarm_name"
+    # Only reset snooze count if this is NOT a snoozed execution
+    if [[ "$is_snoozed" != "true" ]]; then
+        logger -t breaktime "Resetting snooze count for $alarm_name (regular schedule)"
+        snooze_reset_count "$alarm_name"
+    else
+        logger -t breaktime "Preserving snooze count for $alarm_name (snoozed execution)"
+    fi
     
     # Clean up any pending snooze jobs
     snooze_cleanup_jobs "$alarm_name"
     
-    # Send final notification (this will handle user interaction)
-    notify_send_final "$alarm_name" "$action"
+    # Check if desktop notifications are enabled
+    local desktop_notifications=$(config_get_desktop_notifications)
+    
+    if [[ "$desktop_notifications" == "false" ]]; then
+        # Auto-execute without showing dialog
+        logger -t breaktime "Desktop notifications disabled, auto-executing $action for $alarm_name"
+        echo "⚡ Breaktime: Auto-executing $action for $alarm_name (notifications disabled)"
+        
+        # Wait a moment for user to see terminal message
+        sleep 3
+        
+        # Execute the action directly
+        cron_execute_system_action "$action"
+    else
+        # Send final notification (this will handle user interaction)
+        notify_send_final "$alarm_name" "$action"
+    fi
     
     # Note: Action execution is now handled by notify_send_final through user interaction
     # This function only gets called for immediate execution (--sleep-now)

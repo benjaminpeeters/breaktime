@@ -267,3 +267,29 @@ config_get_snooze_duration() {
     local duration=$(grep "^[[:space:]]*snooze_duration:" "${CONFIG_FILE}" | sed 's/.*snooze_duration:[[:space:]]*//' | sed 's/#.*//' | tr -d '"' | tr -d "'" | xargs)
     echo "${duration:-2}"
 }
+
+config_get_desktop_notifications() {
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        echo "true"  # default
+        return
+    fi
+    
+    # Extract desktop_notifications setting from notifications section
+    local in_notifications=false
+    local desktop_notifications="true"  # Default to true
+    
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*notifications:[[:space:]]*$ ]]; then
+            in_notifications=true
+            continue
+        elif [[ "$line" =~ ^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*:[[:space:]]*$ ]] && [[ "$in_notifications" == true ]]; then
+            # We've hit another top-level section
+            break
+        elif [[ "$in_notifications" == true ]] && [[ "$line" =~ ^[[:space:]]*desktop_notifications:[[:space:]]*(.*) ]]; then
+            desktop_notifications=$(echo "${BASH_REMATCH[1]}" | tr -d '"' | tr -d "'" | xargs)
+            break
+        fi
+    done < "${CONFIG_FILE}"
+    
+    echo "${desktop_notifications}"
+}
