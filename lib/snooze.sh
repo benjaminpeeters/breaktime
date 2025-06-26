@@ -166,6 +166,7 @@ snooze_cleanup() {
     if [[ -d "${SNOOZE_STATE_DIR}" ]]; then
         find "${SNOOZE_STATE_DIR}" -name "*.count" -type f -mtime +1 -delete 2>/dev/null || true
         find "${SNOOZE_STATE_DIR}" -name "*.jobs" -type f -mtime +1 -delete 2>/dev/null || true
+        find "${SNOOZE_STATE_DIR}" -name "suspend_success_*" -type f -mtime +1 -delete 2>/dev/null || true
     fi
 }
 

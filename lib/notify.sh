@@ -11,6 +11,15 @@ yad_send_notification() {
     local minutes="$3"
     local is_final="${4:-false}"
     
+    # Check if a recent suspend success occurred for this alarm (within last 2 minutes)
+    if [[ "$is_final" == "true" ]]; then
+        local recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_*" -newermt "2 minutes ago" 2>/dev/null | head -1)
+        if [[ -n "$recent_success" ]]; then
+            logger -t breaktime "Skipping dialog for $alarm_name - recent suspend success found: $(basename "$recent_success")"
+            return 0
+        fi
+    fi
+    
     # Determine dialog type and styling based on urgency
     local dialog_type="--info"
     local timeout=8
@@ -113,8 +122,16 @@ yad_send_notification() {
                         # Reset snooze count and clean up jobs
                         snooze_reset_count "$alarm_name"
                         snooze_cleanup_jobs "$alarm_name"
+                        
+                        # Create success marker to prevent dialog reshowing after resume
+                        local success_file="${SNOOZE_STATE_DIR}/suspend_success_${alarm_name}_$(date +%s)"
+                        echo "$(date): Successfully suspended for $alarm_name" > "$success_file"
+                        
                         # Execute the system action directly
                         cron_execute_system_action "$action"
+                        # Exit the script entirely after suspend to prevent dialog loop
+                        logger -t breaktime "System action completed, exiting notification process"
+                        exit 0
                         ;;
                     1)
                         # Snooze button
