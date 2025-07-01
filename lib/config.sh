@@ -4,6 +4,104 @@
 # Copyright (C) 2025 Benjamin Peeters
 # Licensed under AGPL-3.0
 
+# Debug logging infrastructure
+if [[ -z "${DEBUG_LOG_DIR:-}" ]]; then
+    readonly DEBUG_LOG_DIR="/tmp/breaktime/logs"
+fi
+if [[ -z "${DEBUG_ENABLED:-}" ]]; then
+    readonly DEBUG_ENABLED="true"
+fi
+
+debug_log() {
+    local component="$1"
+    local level="$2"
+    local message="$3"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local pid=$$
+    
+    if [[ "$DEBUG_ENABLED" != "true" ]]; then
+        return 0
+    fi
+    
+    # Ensure log directory exists
+    mkdir -p "$DEBUG_LOG_DIR" 2>/dev/null || true
+    
+    # Create component-specific log file
+    local log_file="${DEBUG_LOG_DIR}/${component}.log"
+    
+    # Format: [TIMESTAMP] [PID] [LEVEL] MESSAGE
+    local log_entry="[${timestamp}] [${pid}] [${level}] ${message}"
+    
+    # Write to both file and syslog
+    echo "$log_entry" >> "$log_file" 2>/dev/null || true
+    logger -t "breaktime-${component}" "$log_entry" 2>/dev/null || true
+    
+    # Also write to main debug log
+    echo "$log_entry" >> "${DEBUG_LOG_DIR}/breaktime-debug.log" 2>/dev/null || true
+}
+
+debug_log_environment() {
+    local component="$1"
+    debug_log "$component" "ENV" "=== ENVIRONMENT DUMP ==="
+    debug_log "$component" "ENV" "DISPLAY=${DISPLAY:-<unset>}"
+    debug_log "$component" "ENV" "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
+    debug_log "$component" "ENV" "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}"
+    debug_log "$component" "ENV" "PATH=${PATH}"
+    debug_log "$component" "ENV" "USER=${USER:-<unset>}"
+    debug_log "$component" "ENV" "HOME=${HOME:-<unset>}"
+    debug_log "$component" "ENV" "PWD=${PWD:-<unset>}"
+    debug_log "$component" "ENV" "=== END ENVIRONMENT ==="
+}
+
+# Function to detect the active display
+detect_active_display() {
+    local detected_display=""
+    
+    # Method 1: Check systemd user environment
+    if command -v systemctl >/dev/null 2>&1; then
+        detected_display=$(systemctl --user show-environment | grep ^DISPLAY= | cut -d= -f2)
+        if [[ -n "$detected_display" ]]; then
+            debug_log "config" "INFO" "Detected display from systemd: $detected_display"
+            echo "$detected_display"
+            return 0
+        fi
+    fi
+    
+    # Method 2: Check active X sessions
+    local x_displays=$(ps aux | grep -E "Xorg.*vt" | grep -v grep | sed -n 's/.*:\([0-9]\+\).*/:\1/p' | head -1)
+    if [[ -n "$x_displays" ]]; then
+        debug_log "config" "INFO" "Detected display from Xorg process: $x_displays"
+        echo "$x_displays"
+        return 0
+    fi
+    
+    # Method 3: Check /tmp/.X11-unix sockets
+    if [[ -d /tmp/.X11-unix ]]; then
+        for socket in /tmp/.X11-unix/X*; do
+            if [[ -S "$socket" ]]; then
+                local display_num=$(basename "$socket" | sed 's/X//')
+                detected_display=":${display_num}"
+                debug_log "config" "INFO" "Detected display from X11 socket: $detected_display"
+                echo "$detected_display"
+                return 0
+            fi
+        done
+    fi
+    
+    # Method 4: Try common defaults
+    for try_display in :0 :1; do
+        if DISPLAY=$try_display xset q &>/dev/null; then
+            debug_log "config" "INFO" "Detected working display by testing: $try_display"
+            echo "$try_display"
+            return 0
+        fi
+    done
+    
+    # Fallback to :0
+    debug_log "config" "WARN" "Could not detect display, using default :0"
+    echo ":0"
+}
+
 config_edit() {
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         echo -e "${YELLOW}⚠️  No configuration found. Creating from template...${NC}"

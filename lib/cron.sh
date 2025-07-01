@@ -60,12 +60,12 @@ cron_add_alarm() {
                 local warn_hour=$(echo "$warn_time" | cut -d: -f1)
                 local warn_minute=$(echo "$warn_time" | cut -d: -f2)
                 
-                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 1-5 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}\n"
+                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
             fi
         done < <(config_get_alarm_warnings "$alarm_name")
         
         # Schedule main action
-        new_jobs="${new_jobs}${minute} ${hour} * * 1-5 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}\n"
+        new_jobs="${new_jobs}${minute} ${hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
     fi
     
     # Add weekend schedule if defined
@@ -81,12 +81,12 @@ cron_add_alarm() {
                 local warn_hour=$(echo "$warn_time" | cut -d: -f1)
                 local warn_minute=$(echo "$warn_time" | cut -d: -f2)
                 
-                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 6,0 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" ${CRON_MARKER}\n"
+                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
             fi
         done < <(config_get_alarm_warnings "$alarm_name")
         
         # Schedule main action
-        new_jobs="${new_jobs}${minute} ${hour} * * 6,0 DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" ${CRON_MARKER}\n"
+        new_jobs="${new_jobs}${minute} ${hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
     fi
     
     # Add all new jobs at once
@@ -180,16 +180,27 @@ cron_execute_warning() {
     local alarm_name="$1"
     local warning_minutes="$2"
     
+    debug_log "cron" "INFO" "=== WARNING EXECUTION START ==="
+    debug_log "cron" "INFO" "Executing warning for alarm='$alarm_name' minutes='$warning_minutes'"
+    debug_log_environment "cron"
+    
     # Check if desktop notifications are enabled
     local desktop_notifications=$(config_get_desktop_notifications)
+    debug_log "cron" "INFO" "Desktop notifications setting: $desktop_notifications"
     
     if [[ "$desktop_notifications" == "false" ]]; then
         # Just log, don't show notification
+        debug_log "cron" "INFO" "Warning suppressed (notifications disabled): $alarm_name in $warning_minutes minutes"
         logger -t breaktime "Warning suppressed (notifications disabled): $alarm_name in $warning_minutes minutes"
     else
         local message=$(config_get_warning_message "$alarm_name" "$warning_minutes")
+        debug_log "cron" "INFO" "Warning message: '$message'"
+        debug_log "cron" "INFO" "Calling notify_send_warning..."
         notify_send_warning "$alarm_name" "$message" "$warning_minutes"
+        debug_log "cron" "INFO" "notify_send_warning completed"
     fi
+    
+    debug_log "cron" "INFO" "=== WARNING EXECUTION END ==="
 }
 
 cron_execute_action() {
@@ -197,22 +208,31 @@ cron_execute_action() {
     local action="$2"
     local is_snoozed="${3:-false}"  # New parameter to indicate if this is from a snooze
     
+    debug_log "cron" "INFO" "=== ACTION EXECUTION START ==="
+    debug_log "cron" "INFO" "Executing action for alarm='$alarm_name' action='$action' is_snoozed='$is_snoozed'"
+    debug_log_environment "cron"
+    
     # Only reset snooze count if this is NOT a snoozed execution
     if [[ "$is_snoozed" != "true" ]]; then
+        debug_log "cron" "INFO" "Resetting snooze count for $alarm_name (regular schedule)"
         logger -t breaktime "Resetting snooze count for $alarm_name (regular schedule)"
         snooze_reset_count "$alarm_name"
     else
+        debug_log "cron" "INFO" "Preserving snooze count for $alarm_name (snoozed execution)"
         logger -t breaktime "Preserving snooze count for $alarm_name (snoozed execution)"
     fi
     
     # Clean up any pending snooze jobs
+    debug_log "cron" "INFO" "Cleaning up pending snooze jobs for $alarm_name"
     snooze_cleanup_jobs "$alarm_name"
     
     # Check if desktop notifications are enabled
     local desktop_notifications=$(config_get_desktop_notifications)
+    debug_log "cron" "INFO" "Desktop notifications setting: $desktop_notifications"
     
     if [[ "$desktop_notifications" == "false" ]]; then
         # Auto-execute without showing dialog
+        debug_log "cron" "INFO" "Desktop notifications disabled, auto-executing $action for $alarm_name"
         logger -t breaktime "Desktop notifications disabled, auto-executing $action for $alarm_name"
         echo "⚡ Breaktime: Auto-executing $action for $alarm_name (notifications disabled)"
         
@@ -220,11 +240,18 @@ cron_execute_action() {
         sleep 3
         
         # Execute the action directly
+        debug_log "cron" "INFO" "Calling cron_execute_system_action with action='$action'"
         cron_execute_system_action "$action"
+        debug_log "cron" "INFO" "cron_execute_system_action completed"
     else
         # Send final notification (this will handle user interaction)
+        debug_log "cron" "INFO" "Showing final notification dialog"
+        debug_log "cron" "INFO" "Calling notify_send_final with alarm='$alarm_name' action='$action'"
         notify_send_final "$alarm_name" "$action"
+        debug_log "cron" "INFO" "notify_send_final completed"
     fi
+    
+    debug_log "cron" "INFO" "=== ACTION EXECUTION END ==="
     
     # Note: Action execution is now handled by notify_send_final through user interaction
     # This function only gets called for immediate execution (--sleep-now)
@@ -234,28 +261,54 @@ cron_execute_action() {
 cron_execute_system_action() {
     local action="$1"
     
+    debug_log "cron" "INFO" "=== SYSTEM ACTION EXECUTION START ==="
+    debug_log "cron" "INFO" "Executing system action: $action"
     logger -t breaktime "Executing system action: $action"
+    
     case "$action" in
         "suspend")
+            debug_log "cron" "INFO" "Attempting suspend via systemctl"
             # Try multiple suspend methods in order of preference
             if command -v systemctl >/dev/null 2>&1; then
-                systemctl suspend || logger -t breaktime "systemctl suspend failed"
+                if systemctl suspend; then
+                    debug_log "cron" "INFO" "systemctl suspend succeeded"
+                else
+                    debug_log "cron" "ERROR" "systemctl suspend failed"
+                    logger -t breaktime "systemctl suspend failed"
+                fi
             elif command -v pm-suspend >/dev/null 2>&1; then
-                pm-suspend || logger -t breaktime "pm-suspend failed"
+                debug_log "cron" "INFO" "Attempting suspend via pm-suspend"
+                if pm-suspend; then
+                    debug_log "cron" "INFO" "pm-suspend succeeded"
+                else
+                    debug_log "cron" "ERROR" "pm-suspend failed"
+                    logger -t breaktime "pm-suspend failed"
+                fi
             else
+                debug_log "cron" "INFO" "Attempting suspend via dbus"
                 # Use dbus as last resort
-                dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.Suspend boolean:true || logger -t breaktime "dbus suspend failed"
+                if dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.Suspend boolean:true; then
+                    debug_log "cron" "INFO" "dbus suspend succeeded"
+                else
+                    debug_log "cron" "ERROR" "dbus suspend failed"
+                    logger -t breaktime "dbus suspend failed"
+                fi
             fi
             ;;
         "shutdown")
+            debug_log "cron" "INFO" "Attempting shutdown"
             systemctl poweroff || shutdown -h now
             ;;
         "hibernate")
+            debug_log "cron" "INFO" "Attempting hibernate"
             systemctl hibernate
             ;;
         *)
+            debug_log "cron" "ERROR" "Unknown action: $action"
             echo "Unknown action: $action" >&2
             exit 1
             ;;
     esac
+    
+    debug_log "cron" "INFO" "=== SYSTEM ACTION EXECUTION END ==="
 }

@@ -11,13 +11,21 @@ yad_send_notification() {
     local minutes="$3"
     local is_final="${4:-false}"
     
+    debug_log "notify" "INFO" "=== YAD NOTIFICATION START ==="
+    debug_log "notify" "INFO" "yad_send_notification called: alarm='$alarm_name' minutes='$minutes' is_final='$is_final'"
+    debug_log "notify" "INFO" "Message: '$message'"
+    debug_log_environment "notify"
+    
     # Check if a recent suspend success occurred for this alarm (within last 2 minutes)
     if [[ "$is_final" == "true" ]]; then
+        debug_log "notify" "INFO" "Checking for recent suspend success files"
         local recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_*" -newermt "2 minutes ago" 2>/dev/null | head -1)
         if [[ -n "$recent_success" ]]; then
+            debug_log "notify" "INFO" "Skipping dialog - recent suspend success found: $(basename "$recent_success")"
             logger -t breaktime "Skipping dialog for $alarm_name - recent suspend success found: $(basename "$recent_success")"
             return 0
         fi
+        debug_log "notify" "INFO" "No recent suspend success found, proceeding with dialog"
     fi
     
     # Determine dialog type and styling based on urgency
@@ -111,23 +119,53 @@ yad_send_notification() {
     
     # Execute with proper environment
     local result=0
+    debug_log "notify" "INFO" "Checking if YAD is available..."
     if command -v yad >/dev/null 2>&1; then
+        debug_log "notify" "INFO" "YAD is available, constructing command: $yad_cmd"
+        
+        # Detect and set the active display
+        local active_display=$(detect_active_display)
+        export DISPLAY="${active_display}"
+        debug_log "notify" "INFO" "Using detected display: $DISPLAY"
+        
+        # Test if display is accessible
+        debug_log "notify" "INFO" "Testing display accessibility..."
+        if xset q &>/dev/null; then
+            debug_log "notify" "INFO" "Display $DISPLAY is accessible"
+        else
+            debug_log "notify" "WARN" "Display $DISPLAY is not accessible, will try anyway"
+        fi
+        
         # For final dialogs, keep showing until user makes a choice
         if [[ "$is_final" == "true" ]]; then
+            debug_log "notify" "INFO" "Showing final dialog (persistent until user choice)"
             local made_choice=false
+            local attempt=1
             while [[ "$made_choice" == "false" ]]; do
-                DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME eval "$yad_cmd" 2>/dev/null || result=$?
+                debug_log "notify" "INFO" "Dialog attempt #$attempt"
                 
+                # Capture stderr for debugging
+                local yad_stderr=$(mktemp)
+                eval "$yad_cmd" 2>"$yad_stderr" || result=$?
+                local yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+                rm -f "$yad_stderr" 2>/dev/null
+                
+                debug_log "notify" "INFO" "YAD dialog result code: $result for $alarm_name"
+                if [[ -n "$yad_error_output" ]]; then
+                    debug_log "notify" "WARN" "YAD stderr output: $yad_error_output"
+                fi
                 logger -t breaktime "DEBUG: YAD dialog result code: $result for $alarm_name"
                 
                 # Check if user made a valid choice (clicked a button)
                 case $result in
                     0)
                         # Suspend Now button
+                        debug_log "notify" "INFO" "User clicked Suspend Now for $alarm_name"
                         logger -t breaktime "User clicked Suspend Now for $alarm_name"
                         made_choice=true
                         # Handle suspend immediately
                         local action=$(config_get_alarm_action "$alarm_name")
+                        debug_log "notify" "INFO" "Executing system action: $action for $alarm_name"
                         logger -t breaktime "Executing system action: $action for $alarm_name"
                         # Reset snooze count and clean up jobs
                         snooze_reset_count "$alarm_name"
@@ -136,35 +174,56 @@ yad_send_notification() {
                         # Create success marker to prevent dialog reshowing after resume
                         local success_file="${SNOOZE_STATE_DIR}/suspend_success_${alarm_name}_$(date +%s)"
                         echo "$(date): Successfully suspended for $alarm_name" > "$success_file"
+                        debug_log "notify" "INFO" "Created success marker: $success_file"
                         
                         # Execute the system action directly
+                        debug_log "notify" "INFO" "Calling cron_execute_system_action"
                         cron_execute_system_action "$action"
                         # Exit the script entirely after suspend to prevent dialog loop
+                        debug_log "notify" "INFO" "System action completed, exiting notification process"
                         logger -t breaktime "System action completed, exiting notification process"
                         exit 0
                         ;;
                     1)
                         # Snooze button
+                        debug_log "notify" "INFO" "User clicked Snooze for $alarm_name"
                         logger -t breaktime "User clicked Snooze for $alarm_name"
                         made_choice=true
                         # Handle snooze immediately
                         if [[ $(snooze_is_allowed "$alarm_name") == "true" ]]; then
+                            debug_log "notify" "INFO" "Processing snooze request for $alarm_name"
                             logger -t breaktime "Processing snooze request for $alarm_name"
                             ${SCRIPT_DIR}/breaktime.sh --snooze-suspend "$alarm_name"
                         else
+                            debug_log "notify" "WARN" "Snooze not allowed for $alarm_name"
                             logger -t breaktime "Snooze not allowed for $alarm_name"
                         fi
                         ;;
                     *)
                         # Dialog was closed improperly (Alt+F4, etc.) - show it again
+                        debug_log "notify" "WARN" "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), attempt #$attempt"
                         logger -t breaktime "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), reshowing..."
                         sleep 1  # Brief pause before reshowing
+                        ((attempt++))
+                        if [[ $attempt -gt 10 ]]; then
+                            debug_log "notify" "ERROR" "Too many failed dialog attempts, giving up"
+                            made_choice=true
+                        fi
                         ;;
                 esac
             done
         else
             # Regular warnings - show once
-            DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME eval "$yad_cmd" 2>/dev/null || result=$?
+            debug_log "notify" "INFO" "Showing warning dialog (one-time)"
+            local yad_stderr=$(mktemp)
+            eval "$yad_cmd" 2>"$yad_stderr" || result=$?
+            local yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+            rm -f "$yad_stderr" 2>/dev/null
+            
+            debug_log "notify" "INFO" "Warning dialog result code: $result"
+            if [[ -n "$yad_error_output" ]]; then
+                debug_log "notify" "WARN" "YAD stderr output: $yad_error_output"
+            fi
         fi
         
         # Handle button responses for non-final dialogs (warnings)
@@ -172,17 +231,22 @@ yad_send_notification() {
             case $result in
                 0)
                     # OK button for warnings
+                    debug_log "notify" "INFO" "User acknowledged warning for $alarm_name"
                     logger -t breaktime "User acknowledged warning for $alarm_name"
                     ;;
             esac
         fi
     else
         # Fallback to zenity or notify-send
+        debug_log "notify" "WARN" "YAD not available, falling back to zenity/notify-send"
         fallback_notification "$alarm_name" "$message" "$minutes" "$is_final"
     fi
     
     # Log notification
+    debug_log "notify" "INFO" "YAD notification completed: $alarm_name in $minutes minutes"
     logger -t breaktime "YAD notification: $alarm_name in $minutes minutes"
+    
+    debug_log "notify" "INFO" "=== YAD NOTIFICATION END ==="
     
     # Sound disabled per user preference
 }
@@ -206,7 +270,7 @@ fallback_notification() {
             dialog_type="--warning"
         fi
         
-        DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME zenity $dialog_type \
+        zenity $dialog_type \
             --text="$message" \
             --title="Breaktime - $(format_alarm_name "$alarm_name")" \
             --timeout=$timeout \
@@ -222,7 +286,7 @@ fallback_notification() {
             urgency="critical"
         fi
         
-        DISPLAY=:1 XDG_CURRENT_DESKTOP=ubuntu:GNOME notify-send \
+        notify-send \
             --urgency="$urgency" \
             --icon="dialog-information" \
             --expire-time=$((timeout * 1000)) \

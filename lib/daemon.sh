@@ -79,30 +79,43 @@ daemon_monitor_config() {
 
 # Handle special daemon commands
 daemon_handle_command() {
+    debug_log "daemon" "INFO" "=== DAEMON COMMAND START ==="
+    debug_log "daemon" "INFO" "Handling command: $*"
+    debug_log_environment "daemon"
+    
     case "${1:-}" in
         --warn)
+            debug_log "daemon" "INFO" "Calling cron_execute_warning with alarm='$2' minutes='$3'"
             cron_execute_warning "$2" "$3"
             ;;
         --execute)
+            debug_log "daemon" "INFO" "Calling cron_execute_action with alarm='$2' action='$3' snoozed='${4:-false}'"
             cron_execute_action "$2" "$3" "${4:-false}"
             ;;
         --snooze)
+            debug_log "daemon" "INFO" "Calling daemon_handle_snooze with alarm='$2' time='$3'"
             daemon_handle_snooze "$2" "$3"
             ;;
         --snooze-suspend)
+            debug_log "daemon" "INFO" "Calling daemon_handle_snooze_suspend with alarm='$2'"
             daemon_handle_snooze_suspend "$2"
             ;;
         --sleep-now)
+            debug_log "daemon" "INFO" "Calling daemon_handle_sleep_now with alarm='$2' action='$3'"
             daemon_handle_sleep_now "$2" "$3"
             ;;
         --test-notifications)
+            debug_log "daemon" "INFO" "Running notification test"
             notify_test
             ;;
         *)
+            debug_log "daemon" "ERROR" "Unknown daemon command: ${1:-}"
             echo "Unknown daemon command: ${1:-}" >&2
             exit 1
             ;;
     esac
+    
+    debug_log "daemon" "INFO" "=== DAEMON COMMAND END ==="
 }
 
 # Handle snooze request
