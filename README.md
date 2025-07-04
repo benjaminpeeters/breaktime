@@ -118,7 +118,7 @@ Set to `null` to disable for specific day types.
 ## Installation Details
 
 The install script:
-- Creates a symlink at `~/bin/breaktime`
+- Creates a symlink at `~/.local/bin/breaktime`
 - Sets up systemd user service for background operation
 - Creates default configuration
 - Enables auto-start on login

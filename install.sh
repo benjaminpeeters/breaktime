@@ -7,7 +7,7 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly INSTALL_DIR="${HOME}/bin"
+readonly INSTALL_DIR="${HOME}/.local/bin"
 readonly CONFIG_DIR="${HOME}/.config/breaktime"
 
 # Colors for output
@@ -30,7 +30,7 @@ usage() {
     echo ""
     echo -e "${BOLD}DESCRIPTION:${NC}"
     echo "    Installs breaktime automated break scheduling system:"
-    echo "    - Creates symlink in ~/bin/"
+    echo "    - Creates symlink in ~/.local/bin/"
     echo "    - Sets up systemd user service"
     echo "    - Creates default configuration"
     echo "    - Enables auto-start on login"
@@ -108,12 +108,12 @@ check_requirements() {
         echo -e "   Install with: ${BOLD}sudo apt install libnotify-bin${NC}"
     fi
     
-    # Check if ~/bin is in PATH
-    if [[ ":$PATH:" == *":$HOME/bin:"* ]]; then
-        echo -e "✅ ~/bin in PATH: ${GREEN}Yes${NC}"
+    # Check if ~/.local/bin is in PATH
+    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+        echo -e "✅ ~/.local/bin in PATH: ${GREEN}Yes${NC}"
     else
-        echo -e "⚠️  ~/bin in PATH: ${YELLOW}No${NC}"
-        echo -e "   Add to your shell profile: ${BOLD}export PATH=\"\$HOME/bin:\$PATH\"${NC}"
+        echo -e "⚠️  ~/.local/bin in PATH: ${YELLOW}No${NC}"
+        echo -e "   Add to your shell profile: ${BOLD}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}"
     fi
     
     if [[ ${#missing_requirements[@]} -gt 0 ]]; then
@@ -132,7 +132,7 @@ install_breaktime() {
     echo -e "${BOLD}🚀 Installing Breaktime${NC}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    # Create ~/bin directory if it doesn't exist
+    # Create ~/.local/bin directory if it doesn't exist
     mkdir -p "${INSTALL_DIR}"
     
     # Create symlink to breaktime.sh
@@ -194,10 +194,10 @@ install_breaktime() {
     echo -e "• Configuration: ${BLUE}${config_file}${NC}"
     echo -e "• Logs: ${BLUE}journalctl --user -u breaktime${NC}"
     
-    if [[ ":$PATH:" != *":$HOME/bin:"* ]]; then
+    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
         echo ""
-        echo -e "${YELLOW}⚠️  Add ~/bin to your PATH:${NC}"
-        echo -e "   ${BOLD}echo 'export PATH=\"\$HOME/bin:\$PATH\"' >> ~/.bashrc${NC}"
+        echo -e "${YELLOW}⚠️  Add ~/.local/bin to your PATH:${NC}"
+        echo -e "   ${BOLD}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc${NC}"
         echo -e "   ${BOLD}source ~/.bashrc${NC}"
     fi
 }
