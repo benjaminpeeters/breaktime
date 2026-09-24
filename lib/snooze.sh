@@ -102,7 +102,7 @@ snooze_cleanup_jobs() {
     local alarm_name="$1"
     local job_file removed=0
 
-    for job_file in "${SNOOZE_STATE_DIR}/pending/${alarm_name}_"*.job; do
+    for job_file in "${SNOOZE_STATE_DIR}/pending/${alarm_name}_"[0-9]*.job; do
         [[ -f "$job_file" ]] || continue
         rm -f "$job_file"
         removed=$((removed + 1))

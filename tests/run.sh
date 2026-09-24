@@ -53,6 +53,26 @@ EOF
 [[ "$1" == "-t" ]] && shift 2
 if [[ $# -gt 0 ]]; then echo "$*"; else cat; fi >> "$HOME/syslog.txt"
 EOF
+    # yad: records its arguments (one per line) in $HOME/yad/<n>.args and
+    # exits with the next code from $HOME/yad_exit_codes (default 0 = first button)
+    cat > "$bin/yad" <<'EOF'
+#!/bin/bash
+dir="$HOME/yad"
+mkdir -p "$dir"
+n=$(( $(find "$dir" -name '*.args' | wc -l) + 1 ))
+printf '%s\n' "$@" > "$dir/$n.args"
+code=0
+if [[ -s "$HOME/yad_exit_codes" ]]; then
+    code=$(head -1 "$HOME/yad_exit_codes")
+    sed -i 1d "$HOME/yad_exit_codes"
+fi
+exit "$code"
+EOF
+    # notify-send: records its arguments
+    cat > "$bin/notify-send" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" >> "$HOME/notify-send.log"
+EOF
     chmod +x "$bin"/*
 }
 
@@ -150,6 +170,31 @@ assert_cron_has() {
     summary=$(cron_summary)
     grep -qxF "$expected" <<< "$summary" || fail "crontab missing '$expected'. Crontab:
 $summary"
+}
+
+# Number of dialogs shown by the yad stub, and the arguments of dialog N
+yad_calls() {
+    find "$HOME/yad" -name '*.args' 2>/dev/null | wc -l | xargs
+}
+
+yad_args() {
+    cat "$HOME/yad/${1:-1}.args" 2>/dev/null
+}
+
+# Queue exit codes for the next yad calls (0 = first button, 10 = snooze,
+# 252 = closed, 1 = yad failed e.g. no display)
+yad_will_return() {
+    printf '%s\n' "$@" > "$HOME/yad_exit_codes"
+}
+
+# Wait up to $2 seconds (default 10) for a command to succeed
+wait_for() {
+    local cmd="$1" timeout="${2:-10}" i
+    for ((i = 0; i < timeout * 10; i++)); do
+        eval "$cmd" && return 0
+        command sleep 0.1
+    done
+    return 1
 }
 
 update_quietly() {
@@ -452,6 +497,311 @@ t_debug_logging_off_by_default() {
 }
 
 # ---------------------------------------------------------------------------
+# Tests: dialogs (driven through the yad stub)
+# ---------------------------------------------------------------------------
+
+t_final_suspend_now() {
+    snooze_set_count bedtime 2
+    snooze_schedule_job bedtime "$(( $(date +%s) + 600 ))" suspend 2 > /dev/null
+    yad_will_return 0
+
+    ( notify_send_final bedtime suspend ) || fail "final dialog exited with $?"
+
+    assert_eq "1" "$(yad_calls)" "dialogs shown"
+    local args
+    args=$(yad_args 1)
+    assert_contains "$args" "--button=Suspend Now:0" "yad args"
+    assert_contains "$args" "--button=Snooze 2min (1/3 left):10" "yad args"
+    assert_contains "$args" "Used 2/3" "yad args"
+    assert_contains "$args" "--undecorated" "yad args"
+    assert_contains "$(cat "$HOME/systemctl.log")" "suspend" "systemctl calls"
+    assert_eq "0" "$(snooze_get_count bedtime)" "snooze count after suspend"
+    assert_eq "0" "$(find "$SNOOZE_STATE_DIR/pending" -name 'bedtime_*' | wc -l | xargs)" "pending jobs"
+    assert_eq "1" "$(find "$SNOOZE_STATE_DIR" -name 'suspend_success_bedtime_*' | wc -l | xargs)" "success marker"
+}
+
+t_final_snooze_button() {
+    yad_will_return 10
+
+    ( notify_send_final bedtime suspend ) || fail "final dialog exited with $?"
+
+    assert_eq "1" "$(snooze_get_count bedtime)" "snooze count"
+    local job
+    job=$(find "$SNOOZE_STATE_DIR/pending" -name 'bedtime_*.job')
+    [[ -n "$job" ]] || fail "no pending snooze job"
+    local TARGET_TIME ACTION SNOOZE_COUNT
+    # shellcheck source=/dev/null
+    source "$job"
+    assert_eq "suspend" "$ACTION" "job action"
+    assert_eq "1" "$SNOOZE_COUNT" "job snooze count"
+    local delay=$(( TARGET_TIME - $(date +%s) ))
+    [[ $delay -ge 110 && $delay -le 121 ]] || fail "snooze delay ${delay}s, expected ~120s"
+    assert_not_contains "$(cat "$HOME/systemctl.log" 2>/dev/null)" "suspend" "systemctl calls"
+}
+
+t_final_snooze_limit_reached() {
+    snooze_set_count bedtime 3
+    yad_will_return 0
+
+    ( notify_send_final bedtime suspend )
+
+    local args
+    args=$(yad_args 1)
+    assert_not_contains "$args" "--button=Snooze" "buttons"
+    assert_contains "$args" "--button=Suspend Now:0" "buttons"
+    assert_contains "$args" "Snooze limit reached (3/3)" "dialog text"
+}
+
+t_final_limit_reached_ignores_snooze_code() {
+    # Even if yad reports the snooze code at the limit, no job must be created
+    snooze_set_count bedtime 3
+    yad_will_return 10
+
+    ( notify_send_final bedtime suspend )
+
+    assert_eq "0" "$(find "$SNOOZE_STATE_DIR/pending" -name '*.job' 2>/dev/null | wc -l | xargs)" "pending jobs"
+    assert_eq "3" "$(snooze_get_count bedtime)" "snooze count"
+}
+
+t_final_yad_failure_is_not_a_snooze() {
+    # Regression: yad exits 1 when it cannot open the display; that used to
+    # be the snooze button's code, so a broken display silently snoozed
+    sleep() { :; }
+    yad_will_return 1 1 0
+
+    ( notify_send_final bedtime suspend )
+
+    assert_eq "3" "$(yad_calls)" "dialogs shown"
+    assert_eq "0" "$(snooze_get_count bedtime)" "snooze count"
+    assert_eq "0" "$(find "$SNOOZE_STATE_DIR/pending" -name '*.job' 2>/dev/null | wc -l | xargs)" "pending jobs"
+    assert_contains "$(cat "$HOME/systemctl.log")" "suspend" "systemctl calls"
+}
+
+t_final_dismissed_dialog_reappears() {
+    sleep() { :; }
+    yad_will_return 252 70 0
+
+    ( notify_send_final bedtime suspend )
+
+    assert_eq "3" "$(yad_calls)" "dialogs shown"
+    assert_contains "$(cat "$HOME/systemctl.log")" "suspend" "systemctl calls"
+}
+
+t_final_gives_up_after_ten_dismissals() {
+    sleep() { :; }
+    yad_will_return 252 252 252 252 252 252 252 252 252 252 252 252
+
+    ( notify_send_final bedtime suspend )
+
+    assert_eq "10" "$(yad_calls)" "dialogs shown"
+    assert_not_contains "$(cat "$HOME/systemctl.log" 2>/dev/null)" "suspend" "systemctl calls"
+}
+
+t_final_skipped_after_recent_suspend() {
+    snooze_init
+    touch "$SNOOZE_STATE_DIR/suspend_success_bedtime_$(date +%s)"
+
+    ( notify_send_final bedtime suspend )
+
+    assert_eq "0" "$(yad_calls)" "dialogs shown"
+}
+
+t_final_shutdown_action() {
+    yad_will_return 0
+
+    ( notify_send_final bedtime shutdown )
+
+    assert_contains "$(yad_args 1)" "--button=Shut Down Now:0" "yad args"
+    assert_contains "$(cat "$HOME/systemctl.log")" "poweroff" "systemctl calls"
+}
+
+t_warning_dialogs() {
+    cron_execute_warning bedtime 10
+    cron_execute_warning bedtime 2
+
+    assert_eq "2" "$(yad_calls)" "dialogs shown"
+    local first second
+    first=$(yad_args 1)
+    second=$(yad_args 2)
+    assert_contains "$first" "--text=🌙 Time to start winding down! Bedtime in 10 minutes" "10-min warning"
+    assert_contains "$first" "--timeout=8" "10-min warning"
+    assert_contains "$first" "--image=night-light" "10-min warning"
+    assert_not_contains "$first" "--undecorated" "10-min warning"
+    assert_contains "$second" "--text=😴 Save your work! Going to sleep in 2 minutes" "2-min warning"
+    assert_contains "$second" "--timeout=12" "2-min warning"
+    assert_contains "$second" "--button=OK:0" "2-min warning"
+}
+
+t_message_special_characters() {
+    assert_eq "Save & quit <now>, it's #1 \"really\"" "$(config_get_warning_message bedtime 10)" "parsed message"
+    cron_execute_warning bedtime 10
+    assert_contains "$(yad_args 1)" "--text=Save &amp; quit &lt;now&gt;, it's #1 \"really\"" "yad text"
+}
+
+t_fallback_to_notify_send() {
+    # Pretend yad and zenity are not installed
+    command() {
+        if [[ "$1" == "-v" && ( "$2" == "yad" || "$2" == "zenity" ) ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    cron_execute_warning bedtime 2
+    assert_eq "0" "$(yad_calls)" "yad dialogs"
+    local sent
+    sent=$(cat "$HOME/notify-send.log")
+    assert_contains "$sent" "--urgency=critical" "notify-send args"
+    assert_contains "$sent" "Save your work" "notify-send args"
+}
+
+t_full_snooze_cycle() {
+    # Final dialog -> snooze -> job becomes due -> dialog again -> suspend
+    yad_will_return 10 0
+    ( notify_send_final bedtime suspend )
+    local job
+    job=$(find "$SNOOZE_STATE_DIR/pending" -name 'bedtime_*.job')
+    [[ -n "$job" ]] || fail "no pending job after snooze"
+    sed -i 's/^TARGET_TIME=.*/TARGET_TIME="1"/' "$job"
+
+    snooze_check_pending
+    wait
+
+    assert_eq "2" "$(yad_calls)" "dialogs shown"
+    assert_contains "$(yad_args 2)" "Used 1/3" "second dialog"
+    assert_contains "$(yad_args 2)" "(2/3 left)" "second dialog"
+    assert_contains "$(cat "$HOME/systemctl.log")" "suspend" "systemctl calls"
+    assert_eq "0" "$(snooze_get_count bedtime)" "count after suspend"
+}
+
+# ---------------------------------------------------------------------------
+# Tests: daemon (runs the real --daemon loop with short intervals)
+# ---------------------------------------------------------------------------
+
+t_daemon_lifecycle() {
+    export BREAKTIME_POLL_INTERVAL=1 BREAKTIME_CONFIG_POLL_INTERVAL=1
+    "$REPO_DIR/breaktime.sh" --daemon > "$HOME/daemon.out" 2>&1 &
+    local pid=$!
+
+    wait_for 'cron_summary | grep -q "execute bedtime"' 10 \
+        || fail "daemon did not install cron jobs. Output: $(cat "$HOME/daemon.out")"
+
+    # Config change is picked up
+    sed -i '/lunch_break:/,/action/ s/enabled: false/enabled: true/' "$CONFIG_FILE"
+    touch -d '+5 seconds' "$CONFIG_FILE"
+    wait_for 'cron_summary | grep -q "execute lunch_break"' 15 \
+        || fail "config change not applied. Crontab: $(cron_summary)"
+
+    # A due snooze job shows the dialog, and "Suspend Now" suspends
+    yad_will_return 0
+    snooze_schedule_job bedtime 1 suspend 1 > /dev/null
+    wait_for '[[ -f "$HOME/systemctl.log" ]] && grep -q suspend "$HOME/systemctl.log"' 10 \
+        || fail "due snooze job was not executed"
+    assert_eq "0" "$(find "$SNOOZE_STATE_DIR/pending" -name '*.job' | wc -l | xargs)" "pending jobs"
+
+    # Invalid config keeps the existing jobs
+    local before
+    before=$(cron_summary)
+    sed -i 's/weekdays: "23:00"/weekdays: "99:99"/' "$CONFIG_FILE"
+    touch -d '+10 seconds' "$CONFIG_FILE"
+    wait_for 'grep -q "validation failed" "$HOME/syslog.txt"' 15 || fail "invalid config not reported"
+    assert_eq "$before" "$(cron_summary)" "crontab after invalid config"
+
+    # Clean shutdown on SIGTERM, including the config monitor
+    local children
+    children=$(pgrep -P "$pid" | xargs)
+    kill -TERM "$pid"
+    wait_for "! kill -0 $pid 2>/dev/null" 5 || fail "daemon ignored SIGTERM"
+    local child
+    for child in $children; do
+        wait_for "! kill -0 $child 2>/dev/null" 5 || fail "child $child still running after SIGTERM"
+    done
+}
+
+t_daemon_restarts_dead_monitor() {
+    export BREAKTIME_POLL_INTERVAL=1 BREAKTIME_CONFIG_POLL_INTERVAL=1
+    "$REPO_DIR/breaktime.sh" --daemon > "$HOME/daemon.out" 2>&1 &
+    local pid=$!
+    wait_for 'cron_summary | grep -q "execute bedtime"' 10 || fail "daemon did not start"
+
+    # Kill the monitor subshell (the child that is not a sleep)
+    local child monitor=""
+    for child in $(pgrep -P "$pid"); do
+        [[ "$(ps -o comm= -p "$child")" == "sleep" ]] || monitor=$child
+    done
+    [[ -n "$monitor" ]] || fail "monitor process not found"
+    kill "$monitor"
+    wait_for 'grep -q "Config monitor stopped" "$HOME/syslog.txt"' 10 || fail "monitor was not restarted"
+
+    kill -TERM "$pid"
+    wait_for "! kill -0 $pid 2>/dev/null" 5 || fail "daemon ignored SIGTERM"
+}
+
+# ---------------------------------------------------------------------------
+# Tests: regressions from code review
+# ---------------------------------------------------------------------------
+
+t_review_bad_warning_minutes() {
+    local errors
+    errors=$(config_validate 2>&1) && fail "non-numeric warning minutes accepted"
+    assert_contains "$errors" "alarms.bedtime.warnings: invalid minutes '10m'"
+    # Scheduling it anyway must report a failure instead of silently dropping it
+    local output
+    output=$(cron_update_from_config 2>&1)
+    assert_contains "$output" "Failed to add alarm: bedtime" "update output"
+}
+
+t_review_mixed_day_and_night_times() {
+    update_quietly
+    # nap: weekdays 23:00 (night), weekends 15:00 (day) -> 15:00 on Sat/Sun
+    assert_cron_has "00 23 0,1,2,3,4 execute nap suspend"
+    assert_cron_has "00 15 0,6 execute nap suspend"
+    # late: weekdays 16:00 (day), weekends 01:00 (night of Fri/Sat) -> Sat/Sun 01:00
+    assert_cron_has "00 16 1,2,3,4,5 execute late suspend"
+    assert_cron_has "00 01 0,6 execute late suspend"
+}
+
+t_review_warnings_same_indent() {
+    assert_eq "10 2" "$(config_get_alarm_warnings bedtime | xargs)" "warnings"
+    assert_eq "second" "$(config_get_warning_message bedtime 2)" "message"
+}
+
+t_review_alarm_name_prefixes() {
+    snooze_schedule_job lunch_break "$(( $(date +%s) + 60 ))" suspend 1 > /dev/null
+    snooze_cleanup_jobs lunch
+    assert_eq "1" "$(find "$SNOOZE_STATE_DIR/pending" -name 'lunch_break_*' | wc -l | xargs)" "lunch_break job kept"
+
+    touch "$SNOOZE_STATE_DIR/suspend_success_lunch_break_$(date +%s)"
+    yad_will_return 0
+    ( notify_send_final lunch suspend )
+    assert_eq "1" "$(yad_calls)" "lunch dialog shown despite lunch_break marker"
+}
+
+t_review_empty_workdays() {
+    assert_eq "" "$(config_get_workdays)" "workdays"
+    update_quietly
+    assert_cron_has "30 00 0,1,2,3,4,5,6 execute bedtime suspend"
+    assert_not_contains "$(cron_summary)" "00 23" "crontab"
+}
+
+t_review_crlf_config() {
+    config_validate || fail "CRLF config rejected"
+    assert_eq "mon tue wed thu" "$(config_get_workdays | xargs)" "workdays"
+    assert_eq "true" "$(config_get_enabled)" "enabled"
+    update_quietly
+    assert_cron_has "00 23 0,1,2,3 execute bedtime suspend"
+    assert_cron_has "30 00 0,5,6 execute bedtime suspend"
+}
+
+t_review_hash_inside_unquoted_value() {
+    assert_eq "It's C# time" "$(config_get_warning_message bedtime 10)" "message"
+    assert_eq "suspend" "$(config_get_top_value default_action)" "value followed by a comment"
+}
+
+t_review_backslash_in_message() {
+    assert_eq 'C:\\new &amp; &lt;b&gt;' "$(notify_escape_markup 'C:\new & <b>')"
+}
+
+# ---------------------------------------------------------------------------
 # Tests: command line
 # ---------------------------------------------------------------------------
 
@@ -462,6 +812,22 @@ t_cli_status() {
     assert_contains "$output" "Sun–Thu"
     assert_contains "$output" "Sat, Sun"
     assert_contains "$output" "Bedtime"
+}
+
+t_cli_execute_on_fresh_home() {
+    # Regression: with no ~/.cache/breaktime yet, "Suspend Now" used to abort
+    # (set -e) while writing its marker file, before suspending
+    rm -rf "$HOME/.cache"
+    yad_will_return 0
+    "$REPO_DIR/breaktime.sh" --execute bedtime suspend > /dev/null 2>&1 || fail "--execute exited with $?"
+    assert_contains "$(cat "$HOME/systemctl.log" 2>/dev/null)" "suspend" "systemctl calls"
+}
+
+t_cli_warn_and_snooze_commands() {
+    "$REPO_DIR/breaktime.sh" --warn bedtime 10 || fail "--warn exited with $?"
+    assert_contains "$(yad_args 1)" "Time to start winding down" "warning dialog"
+    "$REPO_DIR/breaktime.sh" --snooze-suspend bedtime || fail "--snooze-suspend exited with $?"
+    assert_eq "1" "$(find "$HOME/.cache/breaktime/pending" -name 'bedtime_*.job' | wc -l | xargs)" "pending jobs"
 }
 
 t_cli_help_and_unknown() {
@@ -557,7 +923,68 @@ run_test execute_without_notifications_runs_action t_execute_without_notificatio
 run_test warning_without_notifications_is_silent t_warning_without_notifications_is_silent < <(sed 's/desktop_notifications: true/desktop_notifications: false/' "$REPO_DIR/config/default.yaml")
 run_test debug_logging_off_by_default t_debug_logging_off_by_default < <(default_config)
 
+run_test final_suspend_now t_final_suspend_now < <(default_config)
+run_test final_snooze_button t_final_snooze_button < <(default_config)
+run_test final_snooze_limit_reached t_final_snooze_limit_reached < <(default_config)
+run_test final_limit_reached_ignores_snooze_code t_final_limit_reached_ignores_snooze_code < <(default_config)
+run_test final_yad_failure_is_not_a_snooze t_final_yad_failure_is_not_a_snooze < <(default_config)
+run_test final_dismissed_dialog_reappears t_final_dismissed_dialog_reappears < <(default_config)
+run_test final_gives_up_after_ten_dismissals t_final_gives_up_after_ten_dismissals < <(default_config)
+run_test final_skipped_after_recent_suspend t_final_skipped_after_recent_suspend < <(default_config)
+run_test final_shutdown_action t_final_shutdown_action < <(default_config)
+run_test warning_dialogs t_warning_dialogs < <(default_config)
+run_test message_special_characters t_message_special_characters < <(sed 's/message: "🌙 Time to start winding down! Bedtime in 10 minutes"/message: "Save \& quit <now>, it'"'"'s #1 \\"really\\""  # comment/' "$REPO_DIR/config/default.yaml")
+run_test fallback_to_notify_send t_fallback_to_notify_send < <(default_config)
+run_test full_snooze_cycle t_full_snooze_cycle < <(default_config)
+run_test daemon_lifecycle t_daemon_lifecycle < <(default_config)
+run_test daemon_restarts_dead_monitor t_daemon_restarts_dead_monitor < <(default_config)
+
+run_test review_bad_warning_minutes t_review_bad_warning_minutes < <(sed 's/- minutes: 10$/- minutes: "10m"/' "$REPO_DIR/config/default.yaml")
+run_test review_mixed_day_and_night_times t_review_mixed_day_and_night_times <<'EOF'
+enabled: true
+alarms:
+  nap:
+    enabled: true
+    weekdays: "23:00"
+    weekends: "15:00"
+  late:
+    enabled: true
+    weekdays: "16:00"
+    weekends: "01:00"
+EOF
+run_test review_warnings_same_indent t_review_warnings_same_indent <<'EOF'
+enabled: true
+alarms:
+  bedtime:
+    enabled: true
+    weekdays: "23:00"
+    warnings:
+    - minutes: 10
+      message: "first"
+    - minutes: 2
+      message: "second"
+    action: suspend
+EOF
+run_test review_alarm_name_prefixes t_review_alarm_name_prefixes <<'EOF'
+enabled: true
+alarms:
+  lunch:
+    enabled: true
+    weekdays: "12:00"
+  lunch_break:
+    enabled: true
+    weekdays: "12:30"
+EOF
+run_test review_empty_workdays t_review_empty_workdays < <(config_with_schedule 'schedule:
+  workdays: []')
+run_test review_crlf_config t_review_crlf_config < <(config_with_schedule 'schedule:
+  workdays: [mon, tue, wed, thu]' | sed 's/$/\r/')
+run_test review_hash_inside_unquoted_value t_review_hash_inside_unquoted_value < <(sed -e "s/message: \"🌙 Time to start winding down! Bedtime in 10 minutes\"/message: It's C# time   # comment/" "$REPO_DIR/config/default.yaml")
+run_test review_backslash_in_message t_review_backslash_in_message < <(default_config)
+
 run_test cli_status t_cli_status < <(default_config)
+run_test cli_execute_on_fresh_home t_cli_execute_on_fresh_home < <(default_config)
+run_test cli_warn_and_snooze_commands t_cli_warn_and_snooze_commands < <(default_config)
 run_test cli_help_and_unknown t_cli_help_and_unknown < <(default_config)
 run_test cli_install_via_symlink t_cli_install_via_symlink < <(default_config)
 

@@ -62,11 +62,13 @@ cron_is_workday() {
 # Print "<minute-of-week>" for every occurrence of an alarm during the week.
 # Minute-of-week 0 is Sunday 00:00, matching cron's day-of-week numbering.
 #
-# "evening" mode: each logical day d starts at `day_starts_at`. A night alarm
-# (after `evening_starts_at` or before `day_starts_at`) uses the weekday time
-# when the NEXT day is a workday, so a 00:30 bedtime belongs to the evening
-# before. Daytime alarms use the weekday time when day d itself is a workday.
-# "calendar" mode: the weekday time applies on workdays, by calendar date.
+# "evening" mode: each logical day d starts at `day_starts_at`. A night time
+# (after `evening_starts_at` or before `day_starts_at`) belongs to the evening
+# of day d and counts as a work night when the NEXT day is a workday, so a
+# 00:30 bedtime belongs to the evening before. A daytime time counts as a
+# workday time when day d itself is a workday. The weekdays and weekends
+# times are classified independently.
+# "calendar" mode: the weekdays time applies on workdays, by calendar date.
 cron_alarm_occurrences() {
     local alarm_name="$1"
     local weekday_time weekend_time
@@ -79,34 +81,36 @@ cron_alarm_occurrences() {
     day_start=$(cron_time_to_minutes "$(config_get_schedule_value day_starts_at "04:00")")
     evening_start=$(cron_time_to_minutes "$(config_get_schedule_value evening_starts_at "18:00")")
 
-    # The alarm counts as a night alarm based on its weekday time (or weekend time if unset)
-    local reference_time="${weekday_time:-$weekend_time}"
-    [[ -n "$reference_time" ]] || return 0
-    local reference_minutes is_night=false
-    reference_minutes=$(cron_time_to_minutes "$reference_time")
-    if [[ "$mode" == "evening" ]] && { [[ $reference_minutes -ge $evening_start ]] || [[ $reference_minutes -lt $day_start ]]; }; then
-        is_night=true
-    fi
-
-    local day time minutes fire_day
-    for day in 0 1 2 3 4 5 6; do
-        local check_day=$day
-        [[ "$is_night" == true ]] && check_day=$((day + 1))
-
-        if cron_is_workday "$check_day" "$workdays"; then
-            time="$weekday_time"
-        else
-            time="$weekend_time"
-        fi
+    local time want_workday minutes is_night day check_day fire_day
+    for time in "weekdays:${weekday_time}" "weekends:${weekend_time}"; do
+        want_workday=true
+        [[ "${time%%:*}" == "weekends" ]] && want_workday=false
+        time="${time#*:}"
         [[ -n "$time" ]] || continue
 
         minutes=$(cron_time_to_minutes "$time")
-        fire_day=$day
-        # In evening mode, times before the start of the day belong to the evening before
-        if [[ "$mode" == "evening" ]] && [[ $minutes -lt $day_start ]]; then
-            fire_day=$((day + 1))
+        is_night=false
+        if [[ "$mode" == "evening" ]] && { [[ $minutes -ge $evening_start ]] || [[ $minutes -lt $day_start ]]; }; then
+            is_night=true
         fi
-        echo $(( (fire_day * MINUTES_PER_DAY + minutes) % MINUTES_PER_WEEK ))
+
+        for day in 0 1 2 3 4 5 6; do
+            check_day=$day
+            [[ "$is_night" == true ]] && check_day=$((day + 1))
+
+            if cron_is_workday "$check_day" "$workdays"; then
+                [[ "$want_workday" == true ]] || continue
+            else
+                [[ "$want_workday" == false ]] || continue
+            fi
+
+            fire_day=$day
+            # In evening mode, times before the start of the day belong to the evening before
+            if [[ "$mode" == "evening" ]] && [[ $minutes -lt $day_start ]]; then
+                fire_day=$((day + 1))
+            fi
+            echo $(( (fire_day * MINUTES_PER_DAY + minutes) % MINUTES_PER_WEEK ))
+        done
     done
 }
 
@@ -155,7 +159,10 @@ cron_build_alarm_jobs() {
 cron_add_alarm() {
     local alarm_name="$1"
     local new_jobs
-    new_jobs=$(cron_build_alarm_jobs "$alarm_name")
+    if ! new_jobs=$(cron_build_alarm_jobs "$alarm_name"); then
+        echo -e "${RED}❌ ${alarm_name}: could not compute the schedule (check its times and warnings)${NC}" >&2
+        return 1
+    fi
 
     if [[ -z "$new_jobs" ]]; then
         echo -e "${YELLOW}⚠️  ${alarm_name}: no weekday or weekend time set, nothing scheduled${NC}"
@@ -248,7 +255,9 @@ cron_format_run() {
 }
 
 cron_show_next() {
-    if ! crontab -l 2>/dev/null | grep -qF "${CRON_MARKER}"; then
+    local table
+    table=$(crontab -l 2>/dev/null || true)
+    if [[ "$table" != *"${CRON_MARKER}"* ]]; then
         echo -e "${YELLOW}   No scheduled breaks found${NC}"
         echo -e "   Configure breaks with: ${BOLD}breaktime --config${NC}"
         return 0
@@ -270,7 +279,7 @@ cron_show_next() {
         else
             echo -e "   🎯 ${GREEN}${hour}:${minute}${NC}  ${alarm}: ${arg} — $(cron_format_days "$days")"
         fi
-    done < <(crontab -l 2>/dev/null | grep -F "${CRON_MARKER}" | sort -k2,2n -k1,1n)
+    done < <(grep -F "${CRON_MARKER}" <<< "$table" | sort -k2,2n -k1,1n)
 }
 
 # Handle cron job execution

@@ -65,7 +65,7 @@ detect_active_display() {
 
     # Method 2: Check active X sessions
     local x_display
-    x_display=$(pgrep -a Xorg 2>/dev/null | sed -n 's/.* \(:[0-9]\+\).*/\1/p' | head -1 || true)
+    x_display=$(pgrep -a Xorg 2>/dev/null | sed -n 's/.* \(:[0-9]\+\).*/\1/;T;p;q' || true)
     if [[ -n "$x_display" ]]; then
         debug_log "config" "INFO" "Detected display from Xorg process: $x_display"
         echo "$x_display"
@@ -157,6 +157,12 @@ config_validate() {
                 errors=$((errors + 1))
             fi
         done
+        while read -r value; do
+            if [[ ! "$value" =~ ^[0-9]+$ ]] || [[ $((10#$value)) -lt 1 ]] || [[ $((10#$value)) -gt 1439 ]]; then
+                echo "Error: alarms.${alarm}.warnings: invalid minutes '${value}' (expected a whole number 1-1439)" >&2
+                errors=$((errors + 1))
+            fi
+        done < <(config_get_alarm_warnings "$alarm")
         value=$(config_get_alarm_action "$alarm")
         if [[ ! "$value" =~ ^(suspend|shutdown|hibernate)$ ]]; then
             echo "Error: alarms.${alarm}.action: unknown action '${value}'" >&2
@@ -211,12 +217,17 @@ config_yaml_syntax_ok() {
 config_clean_value() {
     local value="$1"
     # Only strip comments that are outside quotes: handle quoted values first
-    if [[ "$value" =~ ^[[:space:]]*\"([^\"]*)\" ]]; then
+    if [[ "$value" =~ ^[[:space:]]*\"((\\.|[^\"\\])*)\" ]]; then
+        # Double-quoted: support \" and \\ escapes
         value="${BASH_REMATCH[1]}"
+        value="${value//\\\"/\"}"
+        value="${value//\\\\/\\}"
     elif [[ "$value" =~ ^[[:space:]]*\'([^\']*)\' ]]; then
         value="${BASH_REMATCH[1]}"
     else
-        value="${value%%#*}"
+        # YAML comments start with '#' at the beginning or after whitespace
+        [[ "$value" =~ ^[[:space:]]*# ]] && value=""
+        value="${value%%[[:space:]]#*}"
         value="${value#"${value%%[![:space:]]*}"}"
         value="${value%"${value##*[![:space:]]}"}"
     fi
@@ -227,25 +238,28 @@ config_is_time() {
     [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]
 }
 
+# Print the config file with Windows line endings (CRLF) normalized
+config_read() {
+    [[ -f "${CONFIG_FILE}" ]] || return 0
+    tr -d '\r' < "${CONFIG_FILE}"
+}
+
 # Print the lines of a top-level section (without its header line)
 config_section() {
     local section="$1"
-    [[ -f "${CONFIG_FILE}" ]] || return 0
-    awk -v key="$section" '
+    config_read | awk -v key="$section" '
         $0 ~ "^" key ":[[:space:]]*(#.*)?$" { inside = 1; next }
         inside && /^[^[:space:]#]/ { exit }
         inside { print }
-    ' "${CONFIG_FILE}"
+    '
 }
 
 # Value of a top-level scalar key, e.g. `enabled: true`
 config_get_top_value() {
     local key="$1"
     local default="${2:-}"
-    local raw=""
-    if [[ -f "${CONFIG_FILE}" ]]; then
-        raw=$(sed -n "s/^${key}:[[:space:]]*//p" "${CONFIG_FILE}" | head -1)
-    fi
+    local raw
+    raw=$(config_read | sed -n "s/^${key}:[[:space:]]*//;T;p;q")
     raw=$(config_clean_value "$raw")
     echo "${raw:-$default}"
 }
@@ -256,7 +270,7 @@ config_get_section_value() {
     local key="$2"
     local default="${3:-}"
     local raw
-    raw=$(config_section "$section" | sed -n "s/^[[:space:]]\{1,\}${key}:[[:space:]]*//p" | head -1)
+    raw=$(config_section "$section" | sed -n "s/^[[:space:]]\{1,\}${key}:[[:space:]]*//;T;p;q")
     raw=$(config_clean_value "$raw")
     if [[ -z "$raw" || "$raw" == "null" ]]; then
         raw="$default"
@@ -280,7 +294,7 @@ config_get_alarm_value() {
     local key="$2"
     local default="${3:-}"
     local raw
-    raw=$(config_alarm_block "$alarm_name" | sed -n "s/^    ${key}:[[:space:]]*//p" | head -1)
+    raw=$(config_alarm_block "$alarm_name" | sed -n "s/^    ${key}:[[:space:]]*//;T;p;q")
     raw=$(config_clean_value "$raw")
     if [[ -z "$raw" || "$raw" == "null" ]]; then
         raw="$default"
@@ -320,7 +334,7 @@ config_get_alarm_warnings() {
     local alarm_name="$1"
     config_alarm_block "$alarm_name" | awk '
         /^    warnings:/ { inside = 1; next }
-        inside && /^    [^[:space:]]/ { exit }
+        inside && /^    [^[:space:]-]/ { exit }
         inside && match($0, /^[[:space:]]*-[[:space:]]*minutes:[[:space:]]*/) {
             value = substr($0, RLENGTH + 1)
             sub(/[[:space:]]*#.*/, "", value)
@@ -336,7 +350,7 @@ config_get_warning_message() {
     local raw
     raw=$(config_alarm_block "$alarm_name" | awk -v want="$minutes" '
         /^    warnings:/ { inside = 1; next }
-        inside && /^    [^[:space:]]/ { exit }
+        inside && /^    [^[:space:]-]/ { exit }
         inside && match($0, /^[[:space:]]*-[[:space:]]*minutes:[[:space:]]*/) {
             value = substr($0, RLENGTH + 1)
             sub(/[[:space:]]*#.*/, "", value)
@@ -396,13 +410,19 @@ config_day_index() {
 config_get_workdays() {
     local block inline
     block=$(config_section schedule)
-    inline=$(echo "$block" | sed -n 's/^[[:space:]]\{1,\}workdays:[[:space:]]*//p' | head -1)
+    inline=$(echo "$block" | sed -n 's/^[[:space:]]\{1,\}workdays:[[:space:]]*//;T;p;q')
     inline="${inline%%#*}"
+
+    # No workdays key at all: default Monday-Friday
+    if ! grep -q '^[[:space:]]\{1,\}workdays:' <<< "$block"; then
+        printf '%s\n' mon tue wed thu fri
+        return 0
+    fi
 
     local days=""
     if [[ "$inline" == *"["* ]]; then
         days=$(echo "$inline" | tr -d '[]"'\''' | tr ',' '\n')
-    elif echo "$block" | grep -q '^[[:space:]]\{1,\}workdays:'; then
+    else
         days=$(echo "$block" | awk '
             /^[[:space:]]+workdays:/ { inside = 1; next }
             inside && /^[[:space:]]*-/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); sub(/[[:space:]]*#.*/, ""); gsub(/["\047]/, ""); print; next }
@@ -410,11 +430,9 @@ config_get_workdays() {
         ')
     fi
 
-    days=$(echo "$days" | tr -d ' \t' | sed '/^$/d')
-    if [[ -z "$days" ]]; then
-        days=$'mon\ntue\nwed\nthu\nfri'
-    fi
-    echo "$days"
+    # An explicit empty list (`workdays: []`) means every day is a day off
+    echo "$days" | tr -d ' \t' | sed '/^$/d'
+    return 0
 }
 
 # Print the cron day-of-week numbers of the workdays, space separated

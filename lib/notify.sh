@@ -4,13 +4,21 @@
 # Copyright (C) 2025 Benjamin Peeters
 # Licensed under AGPL-3.0
 
+# yad exits with 1 when it fails (e.g. no display), so the snooze button
+# must use a different code or a failure would count as a snooze
+if [[ -z "${NOTIFY_SNOOZE_CODE:-}" ]]; then
+    readonly NOTIFY_SNOOZE_CODE=10
+fi
+
 # Main notification function using YAD
 yad_send_notification() {
     local alarm_name="$1"
     local message="$2"
     local minutes="$3"
     local is_final="${4:-false}"
-    
+    local action="${5:-}"
+    [[ -n "$action" ]] || action=$(config_get_alarm_action "$alarm_name")
+
     debug_log "notify" "INFO" "=== YAD NOTIFICATION START ==="
     debug_log "notify" "INFO" "yad_send_notification called: alarm='$alarm_name' minutes='$minutes' is_final='$is_final'"
     debug_log "notify" "INFO" "Message: '$message'"
@@ -20,7 +28,7 @@ yad_send_notification() {
     if [[ "$is_final" == "true" ]]; then
         debug_log "notify" "INFO" "Checking for recent suspend success files"
         local recent_success
-        recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_*" -newermt "2 minutes ago" 2>/dev/null | head -1)
+        recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_[0-9]*" -newermt "2 minutes ago" 2>/dev/null | head -1 || true)
         if [[ -n "$recent_success" ]]; then
             debug_log "notify" "INFO" "Skipping dialog - recent suspend success found: $(basename "$recent_success")"
             logger -t breaktime "Skipping dialog for $alarm_name - recent suspend success found: $(basename "$recent_success")"
@@ -53,10 +61,10 @@ yad_send_notification() {
         snooze_duration=$(snooze_get_duration)
 
         local action_label
-        action_label="$(notify_action_label "$(config_get_alarm_action "$alarm_name")") Now"
+        action_label="$(notify_action_label "$action") Now"
         buttons+=("--button=${action_label}:0")
         if [[ $remaining_snoozes -gt 0 ]]; then
-            buttons+=("--button=Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left):1")
+            buttons+=("--button=Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left):${NOTIFY_SNOOZE_CODE}")
             message="<span size='large'>${message}\n\n📊 Snooze status: Used ${current_count}/${max_snoozes}</span>"
         else
             message="<span size='large'>${message}\n\n🚫 Snooze limit reached (${max_snoozes}/${max_snoozes})</span>"
@@ -145,7 +153,7 @@ yad_send_notification() {
                 yad_stderr=$(mktemp)
                 result=0
                 "${yad_cmd[@]}" 2>"$yad_stderr" || result=$?
-                yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+                yad_error_output=$(cat "$yad_stderr" 2>/dev/null || true)
                 rm -f "$yad_stderr" 2>/dev/null
                 
                 debug_log "notify" "INFO" "YAD dialog result code: $result for $alarm_name"
@@ -161,8 +169,6 @@ yad_send_notification() {
                         logger -t breaktime "User clicked Suspend Now for $alarm_name"
                         made_choice=true
                         # Handle suspend immediately
-                        local action
-                        action=$(config_get_alarm_action "$alarm_name")
                         debug_log "notify" "INFO" "Executing system action: $action for $alarm_name"
                         logger -t breaktime "Executing system action: $action for $alarm_name"
                         # Reset snooze count and clean up jobs
@@ -172,7 +178,8 @@ yad_send_notification() {
                         # Create success marker to prevent dialog reshowing after resume
                         local success_file
                         success_file="${SNOOZE_STATE_DIR}/suspend_success_${alarm_name}_$(date +%s)"
-                        echo "$(date): Successfully suspended for $alarm_name" > "$success_file"
+                        snooze_init
+                        echo "$(date): Successfully suspended for $alarm_name" > "$success_file" || true
                         debug_log "notify" "INFO" "Created success marker: $success_file"
                         
                         # Execute the system action directly
@@ -183,7 +190,7 @@ yad_send_notification() {
                         logger -t breaktime "System action completed, exiting notification process"
                         exit 0
                         ;;
-                    1)
+                    "$NOTIFY_SNOOZE_CODE")
                         # Snooze button
                         debug_log "notify" "INFO" "User clicked Snooze for $alarm_name"
                         logger -t breaktime "User clicked Snooze for $alarm_name"
@@ -192,20 +199,22 @@ yad_send_notification() {
                         if [[ $(snooze_is_allowed "$alarm_name") == "true" ]]; then
                             debug_log "notify" "INFO" "Processing snooze request for $alarm_name"
                             logger -t breaktime "Processing snooze request for $alarm_name"
-                            "${SCRIPT_DIR}/breaktime.sh" --snooze-suspend "$alarm_name"
+                            "${SCRIPT_DIR}/breaktime.sh" --snooze-suspend "$alarm_name" || \
+                            debug_log "notify" "WARN" "Snooze request for $alarm_name failed"
                         else
                             debug_log "notify" "WARN" "Snooze not allowed for $alarm_name"
                             logger -t breaktime "Snooze not allowed for $alarm_name"
                         fi
                         ;;
                     *)
-                        # Dialog was closed improperly (Alt+F4, etc.) - show it again
+                        # Closed improperly (Alt+F4: 252, killed: 128+n) or yad failed
+                        # (exit 1, e.g. "cannot open display") - show it again
                         debug_log "notify" "WARN" "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), attempt #$attempt"
                         logger -t breaktime "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), reshowing..."
                         sleep 1  # Brief pause before reshowing
                         attempt=$((attempt + 1))
                         if [[ $attempt -gt 10 ]]; then
-                            debug_log "notify" "ERROR" "Too many failed dialog attempts, giving up"
+                            debug_log "notify" "ERROR" "Too many failed dialog attempts for $alarm_name, giving up (last exit code: $result, stderr: ${yad_error_output:-none})"
                             made_choice=true
                         fi
                         ;;
@@ -217,7 +226,7 @@ yad_send_notification() {
             local yad_stderr yad_error_output
             yad_stderr=$(mktemp)
             "${yad_cmd[@]}" 2>"$yad_stderr" || result=$?
-            yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+            yad_error_output=$(cat "$yad_stderr" 2>/dev/null || true)
             rm -f "$yad_stderr" 2>/dev/null
             
             debug_log "notify" "INFO" "Warning dialog result code: $result"
@@ -320,7 +329,7 @@ notify_send_final() {
     local message
     message="$action_text for $(format_alarm_name "$alarm_name")"
     
-    yad_send_notification "$alarm_name" "$message" "0" "true"
+    yad_send_notification "$alarm_name" "$message" "0" "true" "$action"
     
     # Log action
     logger -t breaktime "Executing: $action for $alarm_name"
@@ -328,9 +337,10 @@ notify_send_final() {
     # Sound disabled per user preference
 }
 
-# Escape &, < and > so user text cannot break yad's Pango markup
+# Escape &, < and > so user text cannot break yad's Pango markup, and
+# backslashes because yad interprets escapes such as \n in --text
 notify_escape_markup() {
-    printf '%s\n' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+    printf '%s\n' "$1" | sed -e 's/\\/\\\\/g' -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
 notify_action_label() {

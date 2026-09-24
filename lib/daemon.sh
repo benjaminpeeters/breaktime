@@ -42,8 +42,8 @@ daemon_run() {
             last_cleanup=$now
         fi
 
-        # Short sleeps in the background keep the TERM trap responsive
-        sleep 30 &
+        # Sleep in the background so the TERM trap stays responsive
+        sleep "${BREAKTIME_POLL_INTERVAL:-30}" &
         wait $! || true
     done
 }
@@ -73,7 +73,7 @@ daemon_monitor_config() {
             fi
         fi
         
-        sleep 5  # Check every 5 seconds
+        sleep "${BREAKTIME_CONFIG_POLL_INTERVAL:-5}"
     done
 }
 

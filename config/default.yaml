@@ -114,8 +114,9 @@ snooze:
 #     default workdays, bedtime uses "weekdays" on Sunday-Thursday nights and
 #     "weekends" on Friday and Saturday nights. A time like "00:30" is part
 #     of the evening before (Friday night -> Saturday 00:30).
-#   * Whether an alarm is a night alarm is decided by its weekdays time
-#     (or its weekends time if weekdays is null).
+#   * The weekdays and weekends times are classified separately, so
+#     weekdays "23:00" + weekends "15:00" gives 23:00 on Sun-Thu nights
+#     and 15:00 on Saturday and Sunday afternoons.
 # - mode: calendar
 #   * The weekdays time applies on the calendar days listed in workdays,
 #     whatever the hour ("00:30" on Saturday means Saturday 00:30).
