@@ -10,7 +10,7 @@ Breaktime helps you maintain a healthy work-life balance by automatically schedu
 - 🍽️ **Lunch breaks** - Midday work interruptions  
 - 💤 **Afternoon naps** - Weekend rest periods
 - 🧠 **Focus breaks** - End of deep work sessions
-- ⚡ **Flexible scheduling** - Different times for weekdays vs weekends
+- ⚡ **Flexible scheduling** - Different times for work nights vs days off, with configurable workdays (e.g. a 4-day week)
 - 🔔 **Smart notifications** - YAD-based dialogs with interactive buttons
 - ⏰ **Snooze functionality** - Limited snoozes with countdown display
 - 🔕 **Silent mode** - Auto-execute when desktop notifications disabled
@@ -22,7 +22,8 @@ Breaktime helps you maintain a healthy work-life balance by automatically schedu
 
 1. **Install breaktime:**
    ```bash
-   cd /home/bpeeters/MEGA/repo/bash/breaktime
+   git clone https://github.com/benjaminpeeters/breaktime.git
+   cd breaktime
    ./install.sh
    ```
 
@@ -62,6 +63,14 @@ Breaktime uses a YAML configuration file at `~/.config/breaktime/config.yaml`:
 ```yaml
 enabled: true
 default_action: suspend  # suspend, shutdown, hibernate
+debug: false             # true = detailed logs in ~/.local/state/breaktime/logs
+
+# Which days you work
+schedule:
+  workdays: [mon, tue, wed, thu, fri]  # e.g. [mon, tue, wed, thu] for 80%
+  mode: evening            # evening (default) or calendar
+  day_starts_at: "04:00"   # times before this belong to the previous evening
+  evening_starts_at: "18:00"
 
 # Global notification settings
 notifications:
@@ -76,14 +85,38 @@ alarms:
   bedtime:
     enabled: true
     action: suspend
-    weekdays: "23:00"     # Sunday-Thursday bedtime
-    weekends: "00:30"     # Friday-Saturday late bedtime
+    weekdays: "23:00"     # nights before a workday (Sun-Thu)
+    weekends: "00:30"     # nights before a day off (Fri, Sat)
     warnings:
       - minutes: 10
         message: "🌙 Time to start winding down! Bedtime in 10 minutes"
       - minutes: 2
         message: "😴 Save your work! Going to sleep in 2 minutes"
 ```
+
+### Workdays: `weekdays` vs `weekends`
+
+`weekdays` times apply on work days and `weekends` times on days off. The
+work days are listed in `schedule.workdays` (Monday–Friday by default).
+
+With `mode: evening` (the default), breaktime thinks in evenings:
+
+- **Night alarms** (after `evening_starts_at` or before `day_starts_at`, e.g.
+  bedtime) use the `weekdays` time when **tomorrow** is a workday. With the
+  default workdays, bedtime is 23:00 on Sunday–Thursday nights and 00:30 on
+  Friday and Saturday nights. An after-midnight time such as `00:30` belongs to
+  the evening before it.
+- **Daytime alarms** (e.g. lunch at 12:30) use the `weekdays` time when
+  **today** is a workday.
+
+If you work 80% with Fridays off, set `workdays: [mon, tue, wed, thu]`.
+Thursday night then gets the later weekend bedtime, and Friday lunch follows
+the `weekends` setting.
+
+With `mode: calendar`, the `weekdays` time simply applies on the calendar days
+listed in `workdays`, whatever the hour.
+
+Run `breaktime --status` to see exactly which days each alarm fires on.
 
 ### Break Types
 
@@ -107,7 +140,7 @@ alarms:
 
 - **max_snoozes** - Maximum number of snoozes per alarm (default: 3)
 - **snooze_duration** - Minutes to delay each snooze (default: 2)
-- Snooze counts reset daily and only apply to final suspend dialogs
+- Snooze counts reset at each regular alarm and only apply to the final dialog
 - Uses reliable file-based scheduling system (no dependency on `at` daemon)
 
 ### Time Format
@@ -146,6 +179,8 @@ breaktime/
 │   └── default.yaml      # Default configuration template
 ├── systemd/
 │   └── breaktime.service # Systemd service template
+├── tests/
+│   └── run.sh            # Test suite (no real cron/suspend needed)
 ├── install.sh            # Installation script
 └── README.md
 ```
@@ -166,6 +201,19 @@ journalctl --user -u breaktime -f
 ```bash
 breaktime --test-notifications
 ```
+
+### Debug logs
+Set `debug: true` in the configuration (or run with `BREAKTIME_DEBUG=1`) to
+write detailed logs to `~/.local/state/breaktime/logs/`. Output of the cron
+jobs always goes to `~/.local/state/breaktime/logs/cron-execution.log`.
+
+### Running the tests
+```bash
+bash tests/run.sh            # all tests
+bash tests/run.sh schedule   # only tests whose name contains "schedule"
+```
+The tests use a temporary `HOME` and stub `crontab`/`systemctl`, so they never
+touch your real crontab or suspend your machine.
 
 ### Manual cron job management
 Breaktime automatically manages cron jobs based on your configuration. All breaktime cron jobs are marked with `# breaktime-managed` for easy identification.
@@ -224,6 +272,11 @@ Breaktime automatically manages cron jobs based on your configuration. All break
 2. View current crontab:
    ```bash
    crontab -l
+   ```
+
+3. Check the output of the cron jobs:
+   ```bash
+   tail ~/.local/state/breaktime/logs/cron-execution.log
    ```
 
 ## Uninstall

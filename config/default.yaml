@@ -8,14 +8,22 @@
 # Global settings
 enabled: true
 default_action: suspend  # suspend, shutdown, hibernate
+debug: false             # true = detailed logs in ~/.local/state/breaktime/logs
+
+# Which days you work, and how "weekdays"/"weekends" times are applied
+schedule:
+  workdays: [mon, tue, wed, thu, fri]  # e.g. [mon, tue, wed, thu] for a 4-day week
+  mode: evening            # evening (default) or calendar
+  day_starts_at: "04:00"   # times before this belong to the previous evening
+  evening_starts_at: "18:00"
 
 # Break schedules and notifications
 alarms:
   bedtime:
     enabled: true
     action: suspend
-    weekdays: "23:00"     # Sunday-Thursday bedtime
-    weekends: "00:30"     # Friday-Saturday late bedtime
+    weekdays: "23:00"     # nights before a workday (Sun-Thu by default)
+    weekends: "00:30"     # nights before a day off (Fri-Sat night by default)
     warnings:
       - minutes: 10
         message: "🌙 Time to start winding down! Bedtime in 10 minutes"
@@ -53,7 +61,7 @@ alarms:
       - minutes: 1
         message: "🔄 Time to step away from the screen!"
 
-# Exception dates (override normal schedule)
+# Exception dates (override normal schedule) - NOT YET IMPLEMENTED, ignored
 exceptions:
   # Example: New Year's Day later bedtime
   # - date: "2025-01-01"
@@ -65,7 +73,7 @@ exceptions:
 notifications:
   desktop_notifications: true
 
-# Snooze settings for 2-minute warnings
+# Snooze settings for the final dialog
 snooze:
   max_snoozes: 3        # Maximum number of snoozes allowed per alarm
   snooze_duration: 2    # Minutes to delay each snooze
@@ -95,14 +103,27 @@ snooze:
 # - minutes: how many minutes before the break
 # - message: custom notification text with emojis
 # 
-# WEEKDAYS vs WEEKENDS:
-# - weekdays: Monday through Friday
-# - weekends: Saturday and Sunday
+# WEEKDAYS vs WEEKENDS (see the "schedule" section):
+# - "weekdays" times apply on work days, "weekends" times on days off.
+#   Work days are listed in schedule.workdays (default Monday-Friday).
+# - mode: evening (default)
+#   * Daytime alarms (between day_starts_at and evening_starts_at, e.g. lunch)
+#     use the weekdays time when TODAY is a workday.
+#   * Night alarms (after evening_starts_at or before day_starts_at, e.g.
+#     bedtime) use the weekdays time when TOMORROW is a workday. So with the
+#     default workdays, bedtime uses "weekdays" on Sunday-Thursday nights and
+#     "weekends" on Friday and Saturday nights. A time like "00:30" is part
+#     of the evening before (Friday night -> Saturday 00:30).
+#   * Whether an alarm is a night alarm is decided by its weekdays time
+#     (or its weekends time if weekdays is null).
+# - mode: calendar
+#   * The weekdays time applies on the calendar days listed in workdays,
+#     whatever the hour ("00:30" on Saturday means Saturday 00:30).
 # - Use null to disable for specific day types
 # 
 # SNOOZE FEATURE:
-# - Only applies to 2-minute warnings (final warning)
-# - Each snooze delays the suspend by the configured duration
+# - Applies to the final dialog shown at the alarm time
+# - Each snooze delays the action by the configured duration
 # - After max snoozes, only "OK" and "Sleep Now" buttons appear
 # - Snooze settings apply globally to all alarms
 # 
@@ -117,4 +138,5 @@ snooze:
 # - breaktime --config    Edit this file
 # - breaktime --status    View current schedule
 # - breaktime --install   Set up automatic scheduling
+# - breaktime --test-notifications   Check that dialogs can be shown
 # ============================================================================

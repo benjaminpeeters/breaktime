@@ -6,17 +6,27 @@
 
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks (e.g. ~/.local/bin/breaktime) to find the real install directory
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+readonly SCRIPT_DIR
 readonly LIB_DIR="${SCRIPT_DIR}/lib"
 readonly CONFIG_DIR="${HOME}/.config/breaktime"
 readonly CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 readonly DEFAULT_CONFIG="${SCRIPT_DIR}/config/default.yaml"
 
+# Ensure required directories exist
+[[ -d "${LIB_DIR}" ]] || { echo "Error: Library directory not found: ${LIB_DIR}" >&2; exit 1; }
+
 # Load library modules
+# shellcheck source=lib/config.sh
 source "${LIB_DIR}/config.sh"
+# shellcheck source=lib/cron.sh
 source "${LIB_DIR}/cron.sh"
+# shellcheck source=lib/notify.sh
 source "${LIB_DIR}/notify.sh"
+# shellcheck source=lib/daemon.sh
 source "${LIB_DIR}/daemon.sh"
+# shellcheck source=lib/snooze.sh
 source "${LIB_DIR}/snooze.sh"
 
 # Colors for output
@@ -39,6 +49,7 @@ usage() {
     echo "    --status, -s        Show current status and next scheduled breaks"
     echo "    --install           Install systemd service and setup"
     echo "    --uninstall         Remove systemd service and cleanup"
+    echo "    --test-notifications  Check notification tools and show a test dialog"
     echo ""
     echo -e "${BOLD}CONFIGURATION:${NC}"
     echo -e "    Configuration file: ${CONFIG_FILE}"
@@ -77,6 +88,9 @@ main() {
             ;;
         --uninstall)
             uninstall_service
+            ;;
+        --warn|--execute|--test-notifications|--sleep-now|--snooze-suspend)
+            daemon_handle_command "$@"
             ;;
         "")
             show_status
@@ -124,19 +138,25 @@ install_service() {
         echo -e "✅ Created default configuration"
     fi
     
+    mkdir -p "${DEBUG_LOG_DIR}"
+
     # Install systemd service
     local service_file="${HOME}/.config/systemd/user/breaktime.service"
     mkdir -p "$(dirname "${service_file}")"
-    cp "${SCRIPT_DIR}/systemd/breaktime.service" "${service_file}"
-    
-    # Update service file with correct path
-    sed -i "s|SCRIPT_PATH|${SCRIPT_DIR}/breaktime.sh|g" "${service_file}"
-    
-    # Enable and start service
+    sed "s|SCRIPT_PATH|${SCRIPT_DIR}/breaktime.sh|g" \
+        "${SCRIPT_DIR}/systemd/breaktime.service" > "${service_file}"
+    echo -e "✅ Installed systemd service: ${BLUE}${service_file}${NC}"
+
+    # Make the graphical session's DISPLAY visible to the service
+    if [[ -n "${DISPLAY:-}" ]]; then
+        systemctl --user import-environment DISPLAY 2>/dev/null || true
+    fi
+
+    # Enable and (re)start service
     systemctl --user daemon-reload
     systemctl --user enable breaktime.service
-    systemctl --user start breaktime.service
-    
+    systemctl --user restart breaktime.service
+
     echo -e "✅ Systemd service installed and started"
     echo -e "✅ Service will auto-start on login"
     echo ""
@@ -167,21 +187,7 @@ uninstall_service() {
     echo -e "Remove manually if desired: ${BOLD}rm -rf ${CONFIG_DIR}${NC}"
 }
 
-# Ensure required directories exist
-[[ -d "${LIB_DIR}" ]] || { echo "Error: Library directory not found: ${LIB_DIR}" >&2; exit 1; }
-
-# Check if we're being called with special daemon commands
-if [[ "${1:-}" =~ ^--(warn|execute|test-notifications|snooze|sleep-now|snooze-suspend)$ ]]; then
-    # Load libraries needed for daemon commands
-    source "${LIB_DIR}/config.sh"
-    source "${LIB_DIR}/cron.sh"
-    source "${LIB_DIR}/notify.sh"
-    source "${LIB_DIR}/daemon.sh"
-    source "${LIB_DIR}/snooze.sh"
-    
-    daemon_handle_command "$@"
-    exit 0
+# Run main function with all arguments (skipped when sourced, e.g. by install.sh)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
-
-# Run main function with all arguments
-main "$@"

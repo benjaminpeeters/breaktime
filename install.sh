@@ -6,7 +6,8 @@
 
 set -euo pipefail
 
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
 readonly INSTALL_DIR="${HOME}/.local/bin"
 readonly CONFIG_DIR="${HOME}/.config/breaktime"
 
@@ -37,8 +38,8 @@ usage() {
     echo ""
     echo -e "${BOLD}REQUIREMENTS:${NC}"
     echo "    - systemd (for background service)"
-    echo "    - notify-send (for desktop notifications)"
     echo "    - cron (for scheduling)"
+    echo "    - yad (dialogs; zenity or notify-send as fallback)"
 }
 
 check_requirements() {
@@ -61,22 +62,6 @@ check_requirements() {
     else
         echo -e "❌ cron: ${RED}Not available${NC}"
         missing_requirements+=("cron")
-    fi
-    
-    # Check and install 'at' command (for snooze functionality)
-    if command -v at >/dev/null 2>&1; then
-        echo -e "✅ at: ${GREEN}Available${NC}"
-    else
-        echo -e "⚠️  at: ${YELLOW}Not available - installing...${NC}"
-        if sudo apt update && sudo apt install -y at; then
-            echo -e "✅ at: ${GREEN}Installed successfully${NC}"
-            # Enable atd service
-            sudo systemctl enable atd
-            sudo systemctl start atd
-        else
-            echo -e "❌ at: ${RED}Failed to install${NC}"
-            missing_requirements+=("at")
-        fi
     fi
     
     # Check and install YAD (preferred notification system)
@@ -145,37 +130,10 @@ install_breaktime() {
     ln -s "${SCRIPT_DIR}/breaktime.sh" "$breaktime_link"
     echo -e "✅ Created symlink: ${BLUE}${breaktime_link}${NC}"
     
-    # Create configuration directory
-    mkdir -p "${CONFIG_DIR}"
-    
-    # Copy default configuration if it doesn't exist
+    # Config, systemd service and cron jobs are set up by breaktime itself
+    "${SCRIPT_DIR}/breaktime.sh" --install
     local config_file="${CONFIG_DIR}/config.yaml"
-    if [[ ! -f "$config_file" ]]; then
-        cp "${SCRIPT_DIR}/config/default.yaml" "$config_file"
-        echo -e "✅ Created configuration: ${BLUE}${config_file}${NC}"
-    else
-        echo -e "📄 Configuration exists: ${BLUE}${config_file}${NC}"
-    fi
-    
-    # Install systemd service
-    local service_dir="${HOME}/.config/systemd/user"
-    local service_file="${service_dir}/breaktime.service"
-    
-    mkdir -p "$service_dir"
-    cp "${SCRIPT_DIR}/systemd/breaktime.service" "$service_file"
-    
-    # Update service file with correct script path
-    sed -i "s|SCRIPT_PATH|${SCRIPT_DIR}/breaktime.sh|g" "$service_file"
-    
-    echo -e "✅ Installed systemd service: ${BLUE}${service_file}${NC}"
-    
-    # Reload systemd and enable service
-    systemctl --user daemon-reload
-    systemctl --user enable breaktime.service
-    systemctl --user start breaktime.service
-    
-    echo -e "✅ Enabled and started breaktime service"
-    
+
     echo ""
     echo -e "${BOLD}🎉 Installation Complete!${NC}"
     echo ""
@@ -235,7 +193,7 @@ uninstall_breaktime() {
     # Remove cron jobs
     if command -v crontab >/dev/null 2>&1; then
         if crontab -l 2>/dev/null | grep -q "breaktime-managed"; then
-            crontab -l 2>/dev/null | grep -v "breaktime-managed" | crontab - 2>/dev/null || true
+            { crontab -l 2>/dev/null | grep -v "breaktime-managed" || true; } | crontab -
             echo -e "🗑️  Removed cron jobs"
         fi
     fi

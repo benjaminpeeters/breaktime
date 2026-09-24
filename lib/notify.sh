@@ -19,7 +19,8 @@ yad_send_notification() {
     # Check if a recent suspend success occurred for this alarm (within last 2 minutes)
     if [[ "$is_final" == "true" ]]; then
         debug_log "notify" "INFO" "Checking for recent suspend success files"
-        local recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_*" -newermt "2 minutes ago" 2>/dev/null | head -1)
+        local recent_success
+        recent_success=$(find "${SNOOZE_STATE_DIR}" -name "suspend_success_${alarm_name}_*" -newermt "2 minutes ago" 2>/dev/null | head -1)
         if [[ -n "$recent_success" ]]; then
             debug_log "notify" "INFO" "Skipping dialog - recent suspend success found: $(basename "$recent_success")"
             logger -t breaktime "Skipping dialog for $alarm_name - recent suspend success found: $(basename "$recent_success")"
@@ -28,104 +29,99 @@ yad_send_notification() {
         debug_log "notify" "INFO" "No recent suspend success found, proceeding with dialog"
     fi
     
+    # Escape Pango markup characters in user-provided text
+    message=$(notify_escape_markup "$message")
+
     # Determine dialog type and styling based on urgency
     local dialog_type="--info"
     local timeout=8
-    local buttons=""
     local width=400
-    
+    local height=""
+    local buttons=()
+
     if [[ "$is_final" == "true" ]]; then
         dialog_type="--warning"
         timeout=0  # No timeout - persistent dialog
         width=660
         height=280
-        
+
         # Check snooze availability for final suspend dialog
-        local remaining_snoozes=$(snooze_get_remaining "$alarm_name")
-        local current_count=$(snooze_get_count "$alarm_name")
-        local max_snoozes=$(snooze_get_max)
-        local snooze_duration=$(snooze_get_duration)
-        
+        local remaining_snoozes current_count max_snoozes snooze_duration
+        remaining_snoozes=$(snooze_get_remaining "$alarm_name")
+        current_count=$(snooze_get_count "$alarm_name")
+        max_snoozes=$(snooze_get_max)
+        snooze_duration=$(snooze_get_duration)
+
+        local action_label
+        action_label="$(notify_action_label "$(config_get_alarm_action "$alarm_name")") Now"
+        buttons+=("--button=${action_label}:0")
         if [[ $remaining_snoozes -gt 0 ]]; then
-            # Show both remaining and used counts for clarity
-            buttons="--button=\"Suspend Now\":0 --button=\"Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left)\":1"
-            # Add snooze info to message with larger font using simple Pango markup
+            buttons+=("--button=Snooze ${snooze_duration}min (${remaining_snoozes}/${max_snoozes} left):1")
             message="<span size='large'>${message}\n\n📊 Snooze status: Used ${current_count}/${max_snoozes}</span>"
         else
-            buttons="--button=\"Suspend Now\":0"
-            # Show that snooze limit is reached with larger font
             message="<span size='large'>${message}\n\n🚫 Snooze limit reached (${max_snoozes}/${max_snoozes})</span>"
         fi
     elif [[ $minutes -le 2 ]]; then
-        dialog_type="--info"
         timeout=12
         width=450
-        buttons="--button=OK:0"
+        buttons+=("--button=OK:0")
     elif [[ $minutes -le 5 ]]; then
-        dialog_type="--info"
         timeout=10
-        buttons="--button=OK:0"
+        buttons+=("--button=OK:0")
     fi
-    
-    # Determine icon based on alarm type (empty for final dialogs to remove default icon)
+
+    # Determine icon based on alarm type (no icon for final dialogs)
     local icon="dialog-information"
     if [[ "$is_final" == "true" ]]; then
-        icon=""  # No icon for suspend dialogs
+        icon=""
     else
         case "$alarm_name" in
-            "bedtime")
-                icon="night-light"
-                ;;
-            "lunch_break")
-                icon="applications-dining"
-                ;;
-            "afternoon_nap"|"focus_break")
-                icon="appointment-soon"
-                ;;
+            "bedtime") icon="night-light" ;;
+            "lunch_break") icon="applications-dining" ;;
+            "afternoon_nap"|"focus_break") icon="appointment-soon" ;;
         esac
     fi
-    
-    # Create YAD command with improved styling
-    local yad_cmd="yad $dialog_type \
-        --text=\"$message\" \
-        --title=\"Breaktime - $(format_alarm_name "$alarm_name")\" \
-        --borders=30 \
-        --timeout=$timeout \
-        --center \
-        --on-top \
-        --no-escape \
-        --width=$width \
-        --skip-taskbar \
-        --window-icon=\"clock\" \
-        --sticky \
-        --always-print-result"
-    
-    # Add icon only if not empty (for final dialogs we skip the icon)
-    if [[ -n "$icon" ]]; then
-        yad_cmd="$yad_cmd --image=\"$icon\""
-    fi
-    
-    # Add close protection and styling for final dialogs
+
+    local yad_cmd=(
+        yad "$dialog_type"
+        --text="$message"
+        --title="Breaktime - $(format_alarm_name "$alarm_name")"
+        --borders=30
+        --timeout="$timeout"
+        --center
+        --on-top
+        --no-escape
+        --width="$width"
+        --skip-taskbar
+        --window-icon=clock
+        --sticky
+        --always-print-result
+    )
+    [[ -n "$icon" ]] && yad_cmd+=(--image="$icon")
+
+    # Close protection and styling for final dialogs
     if [[ "$is_final" == "true" ]]; then
-        # Use aggressive protection - remove decorations and escape handling
-        yad_cmd="$yad_cmd --undecorated --fixed --modal --keep-above --skip-pager --no-escape"
-        # Override the --no-escape that was set earlier for final dialogs
-        yad_cmd=$(echo "$yad_cmd" | sed 's/--no-escape --/--/' | sed 's/--no-escape//')
-        # Add sizing and styling for final dialogs
-        yad_cmd="$yad_cmd --no-escape --height=$height --text-align=center"
+        yad_cmd+=(--undecorated --fixed --modal --keep-above --skip-pager --height="$height" --text-align=center)
     fi
-    
-    yad_cmd="$yad_cmd $buttons"
-    
+    yad_cmd+=("${buttons[@]}")
+
     # Execute with proper environment
     local result=0
     debug_log "notify" "INFO" "Checking if YAD is available..."
     if command -v yad >/dev/null 2>&1; then
-        debug_log "notify" "INFO" "YAD is available, constructing command: $yad_cmd"
-        
+        debug_log "notify" "INFO" "YAD is available, command: ${yad_cmd[*]}"
+
+        # Cron jobs run without a session environment: fill in the usual defaults
+        export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+        if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]] && [[ -S "${XDG_RUNTIME_DIR}/bus" ]]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+        fi
+
         # Detect and set the active display
-        local active_display=$(detect_active_display)
-        export DISPLAY="${active_display}"
+        if [[ -z "${DISPLAY:-}" ]]; then
+            DISPLAY=$(detect_active_display)
+            export DISPLAY
+        fi
         debug_log "notify" "INFO" "Using detected display: $DISPLAY"
         
         # Test if display is accessible
@@ -145,16 +141,17 @@ yad_send_notification() {
                 debug_log "notify" "INFO" "Dialog attempt #$attempt"
                 
                 # Capture stderr for debugging
-                local yad_stderr=$(mktemp)
-                eval "$yad_cmd" 2>"$yad_stderr" || result=$?
-                local yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+                local yad_stderr yad_error_output
+                yad_stderr=$(mktemp)
+                result=0
+                "${yad_cmd[@]}" 2>"$yad_stderr" || result=$?
+                yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
                 rm -f "$yad_stderr" 2>/dev/null
                 
                 debug_log "notify" "INFO" "YAD dialog result code: $result for $alarm_name"
                 if [[ -n "$yad_error_output" ]]; then
                     debug_log "notify" "WARN" "YAD stderr output: $yad_error_output"
                 fi
-                logger -t breaktime "DEBUG: YAD dialog result code: $result for $alarm_name"
                 
                 # Check if user made a valid choice (clicked a button)
                 case $result in
@@ -164,7 +161,8 @@ yad_send_notification() {
                         logger -t breaktime "User clicked Suspend Now for $alarm_name"
                         made_choice=true
                         # Handle suspend immediately
-                        local action=$(config_get_alarm_action "$alarm_name")
+                        local action
+                        action=$(config_get_alarm_action "$alarm_name")
                         debug_log "notify" "INFO" "Executing system action: $action for $alarm_name"
                         logger -t breaktime "Executing system action: $action for $alarm_name"
                         # Reset snooze count and clean up jobs
@@ -172,7 +170,8 @@ yad_send_notification() {
                         snooze_cleanup_jobs "$alarm_name"
                         
                         # Create success marker to prevent dialog reshowing after resume
-                        local success_file="${SNOOZE_STATE_DIR}/suspend_success_${alarm_name}_$(date +%s)"
+                        local success_file
+                        success_file="${SNOOZE_STATE_DIR}/suspend_success_${alarm_name}_$(date +%s)"
                         echo "$(date): Successfully suspended for $alarm_name" > "$success_file"
                         debug_log "notify" "INFO" "Created success marker: $success_file"
                         
@@ -193,7 +192,7 @@ yad_send_notification() {
                         if [[ $(snooze_is_allowed "$alarm_name") == "true" ]]; then
                             debug_log "notify" "INFO" "Processing snooze request for $alarm_name"
                             logger -t breaktime "Processing snooze request for $alarm_name"
-                            ${SCRIPT_DIR}/breaktime.sh --snooze-suspend "$alarm_name"
+                            "${SCRIPT_DIR}/breaktime.sh" --snooze-suspend "$alarm_name"
                         else
                             debug_log "notify" "WARN" "Snooze not allowed for $alarm_name"
                             logger -t breaktime "Snooze not allowed for $alarm_name"
@@ -204,7 +203,7 @@ yad_send_notification() {
                         debug_log "notify" "WARN" "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), attempt #$attempt"
                         logger -t breaktime "Suspend dialog dismissed improperly for $alarm_name (exit code: $result), reshowing..."
                         sleep 1  # Brief pause before reshowing
-                        ((attempt++))
+                        attempt=$((attempt + 1))
                         if [[ $attempt -gt 10 ]]; then
                             debug_log "notify" "ERROR" "Too many failed dialog attempts, giving up"
                             made_choice=true
@@ -215,9 +214,10 @@ yad_send_notification() {
         else
             # Regular warnings - show once
             debug_log "notify" "INFO" "Showing warning dialog (one-time)"
-            local yad_stderr=$(mktemp)
-            eval "$yad_cmd" 2>"$yad_stderr" || result=$?
-            local yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
+            local yad_stderr yad_error_output
+            yad_stderr=$(mktemp)
+            "${yad_cmd[@]}" 2>"$yad_stderr" || result=$?
+            yad_error_output=$(cat "$yad_stderr" 2>/dev/null)
             rm -f "$yad_stderr" 2>/dev/null
             
             debug_log "notify" "INFO" "Warning dialog result code: $result"
@@ -226,15 +226,8 @@ yad_send_notification() {
             fi
         fi
         
-        # Handle button responses for non-final dialogs (warnings)
-        if [[ -n "$buttons" ]] && [[ "$is_final" != "true" ]]; then
-            case $result in
-                0)
-                    # OK button for warnings
-                    debug_log "notify" "INFO" "User acknowledged warning for $alarm_name"
-                    logger -t breaktime "User acknowledged warning for $alarm_name"
-                    ;;
-            esac
+        if [[ "$is_final" != "true" ]] && [[ $result -eq 0 ]]; then
+            debug_log "notify" "INFO" "User acknowledged warning for $alarm_name"
         fi
     else
         # Fallback to zenity or notify-send
@@ -324,7 +317,8 @@ notify_send_final() {
         *) action_text="⚡ Executing $action now" ;;
     esac
     
-    local message="$action_text for $(format_alarm_name "$alarm_name")"
+    local message
+    message="$action_text for $(format_alarm_name "$alarm_name")"
     
     yad_send_notification "$alarm_name" "$message" "0" "true"
     
@@ -334,6 +328,20 @@ notify_send_final() {
     # Sound disabled per user preference
 }
 
+# Escape &, < and > so user text cannot break yad's Pango markup
+notify_escape_markup() {
+    printf '%s\n' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+notify_action_label() {
+    case "$1" in
+        suspend) echo "Suspend" ;;
+        shutdown) echo "Shut Down" ;;
+        hibernate) echo "Hibernate" ;;
+        *) echo "Continue" ;;
+    esac
+}
+
 format_alarm_name() {
     local alarm_name="$1"
     case "$alarm_name" in
@@ -341,7 +349,7 @@ format_alarm_name() {
         "lunch_break") echo "🍽️ Lunch Break" ;;
         "afternoon_nap") echo "💤 Afternoon Nap" ;;
         "focus_break") echo "🧠 Focus Break" ;;
-        *) echo "$(echo "$alarm_name" | sed 's/_/ /g' | sed 's/\b\w/\U&/g')" ;;
+        *) echo "$alarm_name" | sed -e 's/_/ /g' -e 's/\b\w/\U&/g' ;;
     esac
 }
 

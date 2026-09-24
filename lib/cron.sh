@@ -9,170 +9,268 @@ if [[ -z "${CRON_MARKER:-}" ]]; then
     readonly CRON_MARKER="# breaktime-managed"
 fi
 
+readonly MINUTES_PER_DAY=1440
+readonly MINUTES_PER_WEEK=10080
+
 cron_update_from_config() {
     echo -e "${BOLD}🔄 Updating cron jobs from configuration...${NC}"
-    
+
     if [[ $(config_get_enabled) != "true" ]]; then
         echo -e "${YELLOW}⚠️  Breaktime is disabled in configuration${NC}"
         cron_remove_all
         return 0
     fi
-    
+
+    mkdir -p "${DEBUG_LOG_DIR}"
+
     # Remove existing breaktime cron jobs
     cron_remove_all
-    
+
     # Clean up old snooze state files and reset counts for new day
     snooze_cleanup
-    
+
     # Add new cron jobs for enabled alarms
-    local alarm_count=0
+    local alarm_count=0 alarm_name
     while read -r alarm_name; do
         if [[ -n "$alarm_name" ]] && [[ $(config_get_alarm_enabled "$alarm_name") == "true" ]]; then
             if cron_add_alarm "$alarm_name"; then
-                ((alarm_count++))
+                alarm_count=$((alarm_count + 1))
             else
                 echo -e "${RED}❌ Failed to add alarm: ${alarm_name}${NC}" >&2
             fi
         fi
     done < <(config_get_alarms)
-    
-    echo -e "${GREEN}✅ Updated ${alarm_count} cron jobs${NC}"
+
+    echo -e "${GREEN}✅ Scheduled ${alarm_count} alarm(s)${NC}"
     return 0
+}
+
+# "HH:MM" -> minutes since midnight
+cron_time_to_minutes() {
+    local hour="${1%%:*}"
+    local minute="${1##*:}"
+    echo $((10#$hour * 60 + 10#$minute))
+}
+
+# Is day-of-week index (0 = Sunday, may be out of 0..6) a configured workday?
+cron_is_workday() {
+    local day=$(( ($1 % 7 + 7) % 7 ))
+    local workdays=" ${2} "
+    [[ "$workdays" == *" ${day} "* ]]
+}
+
+# Print "<minute-of-week>" for every occurrence of an alarm during the week.
+# Minute-of-week 0 is Sunday 00:00, matching cron's day-of-week numbering.
+#
+# "evening" mode: each logical day d starts at `day_starts_at`. A night alarm
+# (after `evening_starts_at` or before `day_starts_at`) uses the weekday time
+# when the NEXT day is a workday, so a 00:30 bedtime belongs to the evening
+# before. Daytime alarms use the weekday time when day d itself is a workday.
+# "calendar" mode: the weekday time applies on workdays, by calendar date.
+cron_alarm_occurrences() {
+    local alarm_name="$1"
+    local weekday_time weekend_time
+    weekday_time=$(config_get_alarm_time "$alarm_name" "weekdays")
+    weekend_time=$(config_get_alarm_time "$alarm_name" "weekends")
+
+    local workdays mode day_start evening_start
+    workdays=$(config_get_workday_indices)
+    mode=$(config_get_schedule_value mode evening)
+    day_start=$(cron_time_to_minutes "$(config_get_schedule_value day_starts_at "04:00")")
+    evening_start=$(cron_time_to_minutes "$(config_get_schedule_value evening_starts_at "18:00")")
+
+    # The alarm counts as a night alarm based on its weekday time (or weekend time if unset)
+    local reference_time="${weekday_time:-$weekend_time}"
+    [[ -n "$reference_time" ]] || return 0
+    local reference_minutes is_night=false
+    reference_minutes=$(cron_time_to_minutes "$reference_time")
+    if [[ "$mode" == "evening" ]] && { [[ $reference_minutes -ge $evening_start ]] || [[ $reference_minutes -lt $day_start ]]; }; then
+        is_night=true
+    fi
+
+    local day time minutes fire_day
+    for day in 0 1 2 3 4 5 6; do
+        local check_day=$day
+        [[ "$is_night" == true ]] && check_day=$((day + 1))
+
+        if cron_is_workday "$check_day" "$workdays"; then
+            time="$weekday_time"
+        else
+            time="$weekend_time"
+        fi
+        [[ -n "$time" ]] || continue
+
+        minutes=$(cron_time_to_minutes "$time")
+        fire_day=$day
+        # In evening mode, times before the start of the day belong to the evening before
+        if [[ "$mode" == "evening" ]] && [[ $minutes -lt $day_start ]]; then
+            fire_day=$((day + 1))
+        fi
+        echo $(( (fire_day * MINUTES_PER_DAY + minutes) % MINUTES_PER_WEEK ))
+    done
+}
+
+# Build the cron lines for one alarm (warnings + main action), grouped by time
+cron_build_alarm_jobs() {
+    local alarm_name="$1"
+    local action warnings
+    action=$(config_get_alarm_action "$alarm_name")
+    warnings=$(config_get_alarm_warnings "$alarm_name")
+
+    local script="${SCRIPT_DIR}/breaktime.sh"
+    local log="${DEBUG_LOG_DIR}/cron-execution.log"
+
+    # key "<HH> <MM>|<command>" -> list of days
+    local -A jobs=()
+    local order=()
+    local occurrence offset command week_minute key
+    while read -r occurrence; do
+        [[ -n "$occurrence" ]] || continue
+        for offset in $warnings 0; do
+            if [[ "$offset" == "0" ]]; then
+                command="--execute \"${alarm_name}\" \"${action}\""
+            else
+                command="--warn \"${alarm_name}\" \"${offset}\""
+            fi
+            week_minute=$(( ((occurrence - offset) % MINUTES_PER_WEEK + MINUTES_PER_WEEK) % MINUTES_PER_WEEK ))
+            local dow=$(( week_minute / MINUTES_PER_DAY ))
+            local day_minutes=$(( week_minute % MINUTES_PER_DAY ))
+            key="$(printf '%02d %02d' $((day_minutes % 60)) $((day_minutes / 60)))|${command}"
+            if [[ -z "${jobs[$key]:-}" ]]; then
+                order+=("$key")
+                jobs[$key]="$dow"
+            elif [[ " ${jobs[$key]//,/ } " != *" ${dow} "* ]]; then
+                jobs[$key]="${jobs[$key]},${dow}"
+            fi
+        done
+    done < <(cron_alarm_occurrences "$alarm_name")
+
+    for key in "${order[@]}"; do
+        local days
+        days=$(echo "${jobs[$key]}" | tr ',' '\n' | sort -n | paste -sd, -)
+        echo "${key%%|*} * * ${days} \"${script}\" ${key#*|} >> \"${log}\" 2>&1 ${CRON_MARKER}"
+    done
 }
 
 cron_add_alarm() {
     local alarm_name="$1"
-    local weekday_time=$(config_get_alarm_time "$alarm_name" "weekdays")
-    local weekend_time=$(config_get_alarm_time "$alarm_name" "weekends")
-    local action=$(config_get_alarm_action "$alarm_name")
-    local new_jobs=""
-    
-    # Add weekday schedule if defined
-    if [[ -n "$weekday_time" ]]; then
-        local hour minute
-        hour=$(echo "$weekday_time" | cut -d: -f1)
-        minute=$(echo "$weekday_time" | cut -d: -f2)
-        
-        # Schedule warnings
-        while read -r warning_minutes; do
-            if [[ -n "$warning_minutes" ]]; then
-                local warn_time=$(cron_calculate_warning_time "$hour" "$minute" "$warning_minutes")
-                local warn_hour=$(echo "$warn_time" | cut -d: -f1)
-                local warn_minute=$(echo "$warn_time" | cut -d: -f2)
-                
-                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
-            fi
-        done < <(config_get_alarm_warnings "$alarm_name")
-        
-        # Schedule main action
-        new_jobs="${new_jobs}${minute} ${hour} * * 1-5 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
+    local new_jobs
+    new_jobs=$(cron_build_alarm_jobs "$alarm_name")
+
+    if [[ -z "$new_jobs" ]]; then
+        echo -e "${YELLOW}⚠️  ${alarm_name}: no weekday or weekend time set, nothing scheduled${NC}"
+        return 0
     fi
-    
-    # Add weekend schedule if defined
-    if [[ -n "$weekend_time" ]]; then
-        local hour minute
-        hour=$(echo "$weekend_time" | cut -d: -f1)
-        minute=$(echo "$weekend_time" | cut -d: -f2)
-        
-        # Schedule warnings
-        while read -r warning_minutes; do
-            if [[ -n "$warning_minutes" ]]; then
-                local warn_time=$(cron_calculate_warning_time "$hour" "$minute" "$warning_minutes")
-                local warn_hour=$(echo "$warn_time" | cut -d: -f1)
-                local warn_minute=$(echo "$warn_time" | cut -d: -f2)
-                
-                new_jobs="${new_jobs}${warn_minute} ${warn_hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --warn \"${alarm_name}\" \"${warning_minutes}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
-            fi
-        done < <(config_get_alarm_warnings "$alarm_name")
-        
-        # Schedule main action
-        new_jobs="${new_jobs}${minute} ${hour} * * 6,0 ${SCRIPT_DIR}/breaktime.sh --execute \"${alarm_name}\" \"${action}\" >> /tmp/breaktime/logs/cron-execution.log 2>&1 ${CRON_MARKER}\n"
-    fi
-    
-    # Add all new jobs at once
-    if [[ -n "$new_jobs" ]]; then
-        {
-            crontab -l 2>/dev/null || true
-            echo -e "${new_jobs%\\n}"  # Remove trailing newline
-        } | crontab - 2>/dev/null || true
-    fi
+
+    {
+        crontab -l 2>/dev/null || true
+        echo "$new_jobs"
+    } | crontab -
 }
 
 cron_calculate_warning_time() {
     local hour="$1"
     local minute="$2"
     local warning_minutes="$3"
-    
-    # Convert to total minutes
-    local total_minutes=$((hour * 60 + minute))
-    
-    # Subtract warning minutes
-    total_minutes=$((total_minutes - warning_minutes))
-    
-    # Handle day rollover
+
+    local total_minutes=$(( (10#$hour * 60 + 10#$minute - warning_minutes) % MINUTES_PER_DAY ))
     if [[ $total_minutes -lt 0 ]]; then
-        total_minutes=$((total_minutes + 1440))  # Add 24 hours
+        total_minutes=$((total_minutes + MINUTES_PER_DAY))
     fi
-    
-    # Convert back to hour:minute
-    local new_hour=$((total_minutes / 60))
-    local new_minute=$((total_minutes % 60))
-    
-    printf "%02d:%02d" "$new_hour" "$new_minute"
+
+    printf "%02d:%02d" $((total_minutes / 60)) $((total_minutes % 60))
 }
 
 cron_remove_all() {
-    # Remove all breaktime-managed cron jobs
-    local current_crontab=$(crontab -l 2>/dev/null || true)
-    if [[ -n "$current_crontab" ]]; then
-        echo "$current_crontab" | grep -v "${CRON_MARKER}" | crontab - 2>/dev/null || true
+    local current_crontab
+    current_crontab=$(crontab -l 2>/dev/null || true)
+    if [[ "$current_crontab" == *"${CRON_MARKER}"* ]]; then
+        { echo "$current_crontab" | grep -vF "${CRON_MARKER}" || true; } | crontab -
         echo -e "${GREEN}✅ Removed existing breaktime cron jobs${NC}"
     fi
 }
 
-cron_remove_alarm_jobs() {
-    local alarm_name="$1"
-    # Remove all cron jobs for a specific alarm (both regular and snooze jobs)
-    local current_crontab=$(crontab -l 2>/dev/null || true)
-    if [[ -n "$current_crontab" ]]; then
-        echo "$current_crontab" | grep -v "breaktime-managed.*${alarm_name}" | grep -v "breaktime-managed-snooze-${alarm_name}" | crontab - 2>/dev/null || true
+# "0,1,2,3,4" -> "Sun–Thu"; "0,6" -> "Sat–Sun"; all days -> "Daily"
+cron_format_days() {
+    local -a present=(0 0 0 0 0 0 0)
+    local day count=0
+    for day in ${1//,/ }; do
+        present[day]=1
+        count=$((count + 1))
+    done
+    if [[ $count -ge 7 ]]; then
+        echo "Daily"
+        return
+    elif [[ $count -eq 0 ]]; then
+        echo "never"
+        return
+    fi
+
+    # Start on the first day of a run (a present day whose previous day is absent),
+    # scanning from Monday so runs read naturally.
+    local start=-1 i
+    for i in 1 2 3 4 5 6 0; do
+        if [[ ${present[i]} -eq 1 && ${present[(i + 6) % 7]} -eq 0 ]]; then
+            start=$i
+            break
+        fi
+    done
+
+    local parts=() run_start=-1 prev=-1 step idx
+    for step in 0 1 2 3 4 5 6; do
+        idx=$(( (start + step) % 7 ))
+        if [[ ${present[idx]} -eq 1 ]]; then
+            [[ $run_start -lt 0 ]] && run_start=$idx
+            prev=$idx
+        elif [[ $run_start -ge 0 ]]; then
+            parts+=("$(cron_format_run "$run_start" "$prev")")
+            run_start=-1
+        fi
+    done
+    [[ $run_start -ge 0 ]] && parts+=("$(cron_format_run "$run_start" "$prev")")
+
+    local result="${parts[0]}" part
+    for part in "${parts[@]:1}"; do
+        result="${result}, ${part}"
+    done
+    echo "$result"
+}
+
+cron_format_run() {
+    local names=(Sun Mon Tue Wed Thu Fri Sat)
+    if [[ "$1" == "$2" ]]; then
+        echo "${names[$1]}"
+    elif [[ $(( ($1 + 1) % 7 )) == "$2" ]]; then
+        echo "${names[$1]}, ${names[$2]}"
+    else
+        echo "${names[$1]}–${names[$2]}"
     fi
 }
 
 cron_show_next() {
-    if ! crontab -l 2>/dev/null | grep -q "${CRON_MARKER}"; then
+    if ! crontab -l 2>/dev/null | grep -qF "${CRON_MARKER}"; then
         echo -e "${YELLOW}   No scheduled breaks found${NC}"
         echo -e "   Configure breaks with: ${BOLD}breaktime --config${NC}"
         return 0
     fi
-    
-    # Show next few scheduled executions
-    local current_time=$(date '+%Y-%m-%d %H:%M')
-    echo -e "   Current time: ${BLUE}${current_time}${NC}"
+
+    echo -e "   Current time: ${BLUE}$(date '+%a %Y-%m-%d %H:%M')${NC}"
+    echo -e "   Workdays:     ${BLUE}$(cron_format_days "$(config_get_workday_indices | tr ' ' ',')")${NC} (mode: $(config_get_schedule_value mode evening))"
     echo ""
-    
-    # Parse cron jobs and show upcoming ones
-    while read -r line; do
-        if [[ "$line" =~ ${CRON_MARKER} ]]; then
-            local cron_time=$(echo "$line" | awk '{print $2":"$1}')
-            local cron_days=$(echo "$line" | awk '{print $5}')
-            local alarm_info=$(echo "$line" | grep -o '"[^"]*"' | tr -d '"')
-            
-            # Determine day type
-            local day_type=""
-            case "$cron_days" in
-                "1-5") day_type="Weekdays" ;;
-                "6,0") day_type="Weekends" ;;
-                "*") day_type="Daily" ;;
-            esac
-            
-            if [[ "$line" =~ --warn ]]; then
-                echo -e "   ⚠️  ${alarm_info} warning at ${YELLOW}${cron_time}${NC} (${day_type})"
-            elif [[ "$line" =~ --execute ]]; then
-                echo -e "   🎯 ${alarm_info} at ${GREEN}${cron_time}${NC} (${day_type})"
-            fi
+
+    local line minute hour days kind alarm arg
+    while read -r minute hour _ _ days line; do
+        [[ "$line" == *"${CRON_MARKER}"* ]] || continue
+        [[ "$line" =~ --(warn|execute)\ \"([^\"]*)\"\ \"([^\"]*)\" ]] || continue
+        kind="${BASH_REMATCH[1]}"
+        alarm="$(format_alarm_name "${BASH_REMATCH[2]}")"
+        arg="${BASH_REMATCH[3]}"
+        if [[ "$kind" == "warn" ]]; then
+            echo -e "   ⚠️  ${YELLOW}${hour}:${minute}${NC}  ${alarm} warning (${arg} min before) — $(cron_format_days "$days")"
+        else
+            echo -e "   🎯 ${GREEN}${hour}:${minute}${NC}  ${alarm}: ${arg} — $(cron_format_days "$days")"
         fi
-    done < <(crontab -l 2>/dev/null | sort)
+    done < <(crontab -l 2>/dev/null | grep -F "${CRON_MARKER}" | sort -k2,2n -k1,1n)
 }
 
 # Handle cron job execution
@@ -185,7 +283,8 @@ cron_execute_warning() {
     debug_log_environment "cron"
     
     # Check if desktop notifications are enabled
-    local desktop_notifications=$(config_get_desktop_notifications)
+    local desktop_notifications
+    desktop_notifications=$(config_get_desktop_notifications)
     debug_log "cron" "INFO" "Desktop notifications setting: $desktop_notifications"
     
     if [[ "$desktop_notifications" == "false" ]]; then
@@ -193,7 +292,8 @@ cron_execute_warning() {
         debug_log "cron" "INFO" "Warning suppressed (notifications disabled): $alarm_name in $warning_minutes minutes"
         logger -t breaktime "Warning suppressed (notifications disabled): $alarm_name in $warning_minutes minutes"
     else
-        local message=$(config_get_warning_message "$alarm_name" "$warning_minutes")
+        local message
+        message=$(config_get_warning_message "$alarm_name" "$warning_minutes")
         debug_log "cron" "INFO" "Warning message: '$message'"
         debug_log "cron" "INFO" "Calling notify_send_warning..."
         notify_send_warning "$alarm_name" "$message" "$warning_minutes"
@@ -227,7 +327,8 @@ cron_execute_action() {
     snooze_cleanup_jobs "$alarm_name"
     
     # Check if desktop notifications are enabled
-    local desktop_notifications=$(config_get_desktop_notifications)
+    local desktop_notifications
+    desktop_notifications=$(config_get_desktop_notifications)
     debug_log "cron" "INFO" "Desktop notifications setting: $desktop_notifications"
     
     if [[ "$desktop_notifications" == "false" ]]; then

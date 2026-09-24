@@ -11,10 +11,9 @@ Restart=always
 RestartSec=10
 TimeoutStopSec=30
 
-# Environment
+# Environment (DISPLAY is taken from the user session or detected at runtime)
 Environment=HOME=%h
-Environment=XDG_RUNTIME_DIR=/run/user/%i
-Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 
 # Logging
 StandardOutput=journal
@@ -23,10 +22,6 @@ SyslogIdentifier=breaktime
 
 # Security settings (relaxed for user service)
 NoNewPrivileges=true
-PrivateTmp=true
-
-# Allow access to user configuration and crontab
-ReadWritePaths=%h/.config/breaktime
 
 [Install]
 WantedBy=default.target
